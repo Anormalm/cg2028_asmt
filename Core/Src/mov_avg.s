@@ -34,17 +34,28 @@
 @ - Do not call a C helper function and do not use floating-point instructions.
 @
 @ Register table:
-@   R0 ...
-@   R1 ...
-@   R2 ...
-@   R3 ...
-@   R4 ...
+@   R0 = new_data / return filtered output
+@   R1 = old_output
+@   R2 = alpha_percent
+@   R3 = 100 - alpha_percent
+@   R4 = alpha_percent * new_data, then numerator
+@   R5 = (100 - alpha_percent) * old_output
+@   R6 = constant 100 for division
+@   R7 = unused
 @
 @ Write your program from here.
 ewma_filter:
     PUSH {r4-r7, lr}
 
     @ TODO: Implement the EWMA low-pass filter in pure ARM assembly.
+    MOV r3, #100
+    SUB r3, r3, r2 @ r3 = (100 - alpha_percent)
+    MUL r4, r0, r2 @ r4 = new_data * alpha_percent
+    MUL r5, r1, r3 @ r5 = old_output * (100 - alpha_percent)
+    ADD r4, r4, r5 @ r4 = nominator
+
+    MOV r6, #100
+    SDIV r0, r4, r6 @ r0 = result
 
     POP  {r4-r7, pc}
 
