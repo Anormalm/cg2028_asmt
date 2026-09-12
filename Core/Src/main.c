@@ -14,18 +14,22 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <math.h>
 
 /*--------------------------- Configuration ----------------------------------*/
 #define EWMA_ALPHA_ACCEL_PERCENT   25
 #define EWMA_ALPHA_GYRO_PERCENT    25
+
+#define SAMPLE_INTERVAL_MS          20
 #define NORMAL_LED_DELAY_MS       1000
 #define FALL_LED_DELAY_MS          150
+#define UART_PRINT_INTERVAL_MS   200
 
 static void UART1_Init(void);
 static void UART_Send(const char *text);
 
 extern int ewma_filter(int new_data, int old_output, int alpha_percent);
-//int ewma_filter_C(int new_data, int old_output, int alpha_percent);
+int ewma_filter_C(int new_data, int old_output, int alpha_percent);
 
 UART_HandleTypeDef huart1;
 
@@ -33,8 +37,9 @@ int main(void)
 {
     HAL_Init();
     UART1_Init();
+    /* UART sanity test */
+//    UART_Send("test\r\n");
 
-    BSP_LED_Init(LED2);
     BSP_ACCELERO_Init();
     BSP_GYRO_Init();
     BSP_LED_Off(LED2);
@@ -48,6 +53,9 @@ int main(void)
     int gyro_ewma_c[3]  = {0, 0, 0};
 
     unsigned long sample_number = 0;
+
+    uint32_t last_led_toggle = HAL_GetTick();
+    uint32_t last_uart_print = HAL_GetTick();
 
     while (1)
     {
@@ -100,6 +108,16 @@ int main(void)
             gyro_ewma_asm[2] / 1000.0f
         };
 
+        float accel_magnitude =
+            sqrtf(accel_mps2[0] * accel_mps2[0] +
+                  accel_mps2[1] * accel_mps2[1] +
+                  accel_mps2[2] * accel_mps2[2]);
+
+        float gyro_magnitude =
+            sqrtf(gyro_dps[0] * gyro_dps[0] +
+                  gyro_dps[1] * gyro_dps[1] +
+                  gyro_dps[2] * gyro_dps[2]);
+
         char buffer[320];
         snprintf(buffer, sizeof(buffer),
                  "Sample %lu\r\n"
@@ -130,11 +148,20 @@ int main(void)
          *    a fall is detected.
          *********************************************************************/
 
-        int fall_detected = 0;  /* TODO: replace with your fall-detection logic */
+        int fall_detected = 0;   /* temporary */
 
-        BSP_LED_Toggle(LED2);
-        HAL_Delay(fall_detected ? FALL_LED_DELAY_MS : NORMAL_LED_DELAY_MS);
+        uint32_t now = HAL_GetTick();
 
+        uint32_t led_delay =
+            fall_detected ? FALL_LED_DELAY_MS : NORMAL_LED_DELAY_MS;
+
+        if ((now - last_led_toggle) >= led_delay)
+        {
+            BSP_LED_Toggle(LED2);
+            last_led_toggle = now;
+        }
+
+        HAL_Delay(SAMPLE_INTERVAL_MS);
         sample_number++;
     }
 }
