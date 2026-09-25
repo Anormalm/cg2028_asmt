@@ -14,24 +14,36 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "oled.h"
 
 /*--------------------------- Configuration ----------------------------------*/
 #define EWMA_ALPHA_ACCEL_PERCENT   25
 #define EWMA_ALPHA_GYRO_PERCENT    25
-#define NORMAL_LED_DELAY_MS       1000
 #define FALL_LED_DELAY_MS          150
+#define NORMAL_LED_DELAY_MS       1000
+
+static void I2C1_Init(void);
 
 static void UART1_Init(void);
 static void UART_Send(const char *text);
 
+static int ewma_filter_c(int new_data,
+                         int old_output,
+                         int alpha_percent);
+
+//DO NOT CHANGE BELOW LINE
 extern int ewma_filter(int new_data, int old_output, int alpha_percent);
 //int ewma_filter_C(int new_data, int old_output, int alpha_percent);
 
+I2C_HandleTypeDef hi2c1;
 UART_HandleTypeDef huart1;
 
 int main(void)
 {
+
     HAL_Init();
+    I2C1_Init();
+    OLED_Init();
     UART1_Init();
 
     BSP_LED_Init(LED2);
@@ -48,6 +60,8 @@ int main(void)
     int gyro_ewma_c[3]  = {0, 0, 0};
 
     unsigned long sample_number = 0;
+
+    int showFrown = 0;
 
     while (1)
     {
@@ -75,12 +89,12 @@ int main(void)
                 gyro_ewma_asm[axis],
                 EWMA_ALPHA_GYRO_PERCENT);
 
-            accel_ewma_c[axis] = ewma_filter_C(
+            accel_ewma_c[axis] = ewma_filter(
                 (int)accel_raw_i16[axis],
                 accel_ewma_c[axis],
                 EWMA_ALPHA_ACCEL_PERCENT);
 
-            gyro_ewma_c[axis] = ewma_filter_C(
+            gyro_ewma_c[axis] = ewma_filter(
                 gyro_raw_int[axis],
                 gyro_ewma_c[axis],
                 EWMA_ALPHA_GYRO_PERCENT);
@@ -130,12 +144,48 @@ int main(void)
          *    a fall is detected.
          *********************************************************************/
 
-        int fall_detected = 0;  /* TODO: replace with your fall-detection logic */
+        int fall_detected = 0;  /* temporary */
 
+
+        //for real:
+        if (fall_detected == 1) {
+        	if (showFrown == 1) {
+        		OLED_ShowFrown();
+        		OLED_Update();
+        		showFrown = 0;
+        	} else {
+        		OLED_ShowFallDetected();
+        		OLED_Update();
+        		showFrown = 1;
+        	}
+        } else {
+        	OLED_ShowSmiley();
+        	OLED_Update();
+        }
         BSP_LED_Toggle(LED2);
+
+        //for testing purposes:
+        /*if (showFrown == 0) {
+    		OLED_ShowFrown();
+    		OLED_Update();
+    		HAL_Delay(1000);
+    		showFrown = 1;
+    	} else if (showFrown == 1){
+    		OLED_ShowFallDetected();
+    		OLED_Update();
+    		HAL_Delay(1000);
+    		showFrown = 2;
+        } else {
+        	OLED_ShowSmiley();
+        	OLED_Update();
+        	HAL_Delay(1000);
+        	showFrown = 0;
+        }*/
         HAL_Delay(fall_detected ? FALL_LED_DELAY_MS : NORMAL_LED_DELAY_MS);
 
         sample_number++;
+
+
     }
 }
 
@@ -180,6 +230,53 @@ static void UART1_Init(void)
     if (HAL_UART_Init(&huart1) != HAL_OK)
     {
         while (1) { }
+    }
+}
+
+static void I2C1_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_I2C1_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin =
+        GPIO_PIN_8 |
+        GPIO_PIN_9;
+
+    GPIO_InitStruct.Mode =
+        GPIO_MODE_AF_OD;
+
+    GPIO_InitStruct.Pull =
+        GPIO_PULLUP;
+
+    GPIO_InitStruct.Speed =
+        GPIO_SPEED_FREQ_VERY_HIGH;
+
+    GPIO_InitStruct.Alternate =
+        GPIO_AF4_I2C1;
+
+    HAL_GPIO_Init(
+        GPIOB,
+        &GPIO_InitStruct
+    );
+
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.Timing = 0x00303D5B;
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        UART_Send("ERROR: I2C1 initialization failed\r\n");
+        while (1) {
+            BSP_LED_Toggle(LED2);
+            HAL_Delay(100);
+        }
     }
 }
 
