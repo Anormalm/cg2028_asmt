@@ -45,7 +45,14 @@ ewma_filter:
     PUSH {r4-r7, lr}
 
     @ TODO: Implement the EWMA low-pass filter in pure ARM assembly.
+	RSB R3, R2, #100
+	MUL R1, R3, R1
+	MLA R0, R2, R0, R1
 
+	@divide by 100 now:
+	MOV R3, #100
+	SDIV R0, R0, R3
     POP  {r4-r7, pc}
+
 
 .size ewma_filter, .-ewma_filter
