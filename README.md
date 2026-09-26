@@ -86,11 +86,11 @@ Open UART at **115200, 8-N-1, no flow control**. After startup settling, expect
 | Normal operation | Silent buzzer, slow LED, heartbeat about every 10 s |
 | Hold blue B2 for 3 s in NORMAL | Manual SOS, fast LED, audible alarm, queued SOS event |
 | Confirmed simulated fall | Fast LED, audible alarm, queued fall event |
-| Double-tap B2 in NORMAL | Short short long short sound-test rhythm |
-| First 15 s of a fall alarm | Two 100 ms beeps every 2 s |
-| First 15 s of manual SOS | Morse SOS: three short, three long, three short |
-| Alarm unresolved after 15 s | Three 100 ms beeps every 1 s |
-| Release B2, then hold 1 s during an alarm | Local acknowledgement, confirmation chirp, settling then NORMAL |
+| Double-tap B2 in NORMAL | Rising C6?E6?G6?C7 melody |
+| First 15 s of a fall alarm | Alternating 1568/2093 Hz, two 100 ms notes every 2 s |
+| First 15 s of manual SOS | Morse SOS at 2093 Hz: three short, three long, three short |
+| Alarm unresolved after 15 s | Three rising notes (1568/2093/2637 Hz) every 1 s |
+| Release B2, then hold 1 s during an alarm | Local acknowledgement, descending C7?G6?C6 melody, settling then NORMAL |
 | Short B2 tap during alarm | Alarm remains latched |
 | Caregiver clicks Mark seen | Dashboard records it; board alarm remains active |
 | Stop receiver or disconnect Wi-Fi | Local sensing/LED/buzzer/button continue; delivery retries |
@@ -217,13 +217,33 @@ not proof that the motion was safe.
 
 ## Buzzer sound design
 
-The D6/PB1 output uses non-blocking on/off rhythms, updated by the sensor task.
-Two short B2 taps (each 40–350 ms, releases within 500 ms) play the sound test.
-Manual SOS uses Morse SOS, falls use paired warning pulses, both escalate after
-15 seconds, and local acknowledgement gives one short chirp. Alarm onset cancels
-the test rhythm. Holding B2 keeps its existing SOS/acknowledgement behaviour.
+D6/PB1 now uses **TIM3 channel 4, alternate function AF2**, as specified in
+[ST's STM32L4S5 datasheet, Table 16](https://www.st.com/resource/en/datasheet/stm32l4s5qi.pdf).
+Keep the Grove Buzzer on D6 and the shield at 3.3 V. No rewiring is required.
+The timer generates approximately 50% duty PWM using a 1 MHz counter, with
+rounded periods for each requested pitch. TIM3 is reserved for the buzzer;
+do not let another enhancement reconfigure this timer or PB1.
 
-This implementation uses rhythmic effects at the buzzer's own pitch, rather than
-a pitched song. Seeed also documents PWM tone control for the
-[Grove Buzzer](https://wiki.seeedstudio.com/Grove-Buzzer/); that would need a separate
-timer/PWM implementation. Verify the actual sound and loudness on your module.
+Two short B2 taps (each 40?350 ms, releases within 500 ms) play a rising
+C6?E6?G6?C7 motif (1047, 1319, 1568, 2093 Hz). Manual SOS retains its Morse rhythm
+at 2093 Hz; fall alarms alternate 1568/2093 Hz. Both escalate after 15 seconds to
+three rising notes every second. Local acknowledgement plays C7?G6?C6 over
+340 ms, including rests. Alarm onset cancels a test melody immediately on the
+next sensor update. Holding B2 retains its SOS/acknowledgement behaviour.
+
+`Core/Src/buzzer.c` programs TIM3 directly using the supplied CMSIS/HAL headers;
+it needs no timer interrupt, DMA or extra HAL TIM source. The sensor task selects
+notes every 20 ms, but the hardware generates each audio cycle independently.
+Repeated requests for the same pitch do not restart the waveform. Silence sets
+zero duty and stops the counter; the fatal-error handler also stops the buzzer.
+
+Add `buzzer_frequency_hz` to CubeIDE Live Expressions to inspect the requested
+pitch (`0` means silent). It is a diagnostic, not a control variable. Actual pitch
+is slightly rounded by the timer period. While the debugger halts the CPU, the
+last PWM tone can continue because the sequencing task is paused; Resume to
+continue the sequence. Test timing with the CPU running, not single-stepping.
+
+Seeed documents PWM tone control for the
+[Grove Buzzer](https://wiki.seeedstudio.com/Grove-Buzzer/). Audible pitch and volume
+still require verification on the actual module. Build and flash this firmware,
+then double-tap B2 in NORMAL before testing SOS, escalation and acknowledgement.

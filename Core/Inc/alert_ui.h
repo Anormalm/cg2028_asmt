@@ -13,7 +13,7 @@ static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
                           int normal, int alarm)
 {
     if ((uint32_t)(now - u->tune_since) >= 800U) u->tuning = 0;
-    if ((uint32_t)(now - u->chirp_since) >= 100U) u->chirping = 0;
+    if ((uint32_t)(now - u->chirp_since) >= 360U) u->chirping = 0;
     if (alarm && !u->alarm_active) {
         u->alarm_since = now;
         u->chirping = 0;
@@ -51,7 +51,8 @@ static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
     return 0;
 }
 
-static int AlertUI_BuzzerOn(const AlertUI *u, uint32_t now)
+/* Requested pitch in Hz; zero is silence. All sequencing is non-blocking. */
+static uint32_t AlertUI_BuzzerHz(const AlertUI *u, uint32_t now)
 {
     if (u->alarm_active) {
         uint32_t age = (uint32_t)(now - u->alarm_since);
@@ -60,18 +61,28 @@ static int AlertUI_BuzzerOn(const AlertUI *u, uint32_t now)
             uint32_t phase = age % 4000U;
             static const uint16_t starts[9] = {0,200,400,800,1200,1600,2200,2400,2600};
             for (int i = 0; i < 9; ++i)
-                if (phase >= starts[i] && phase < starts[i] + (i >= 3 && i <= 5 ? 300U : 100U)) return 1;
+                if (phase >= starts[i] && phase < starts[i] + (i >= 3 && i <= 5 ? 300U : 100U)) return 2093U;
             return 0;
         }
         uint32_t phase = age % (age < 15000U ? 2000U : 1000U);
-        return phase < 100U || (phase >= 200U && phase < 300U) ||
-               (age >= 15000U && phase >= 400U && phase < 500U);
+        if (phase < 100U) return 1568U;
+        if (phase >= 200U && phase < 300U) return 2093U;
+        if (age >= 15000U && phase >= 400U && phase < 500U) return 2637U;
+        return 0;
     }
-    if (u->chirping && (uint32_t)(now - u->chirp_since) < 100U) return 1;
+    if (u->chirping) {
+        uint32_t phase = (uint32_t)(now - u->chirp_since);
+        if (phase < 100U) return 2093U;
+        if (phase >= 120U && phase < 220U) return 1568U;
+        if (phase >= 240U && phase < 340U) return 1047U;
+    }
     if (u->tuning) {
         uint32_t phase = (uint32_t)(now - u->tune_since);
-        return phase < 80U || (phase >= 160U && phase < 240U) ||
-               (phase >= 320U && phase < 560U) || (phase >= 720U && phase < 800U);
+        /* Rising C6-E6-G6-C7 motif, with rests between notes. */
+        if (phase < 80U) return 1047U;
+        if (phase >= 160U && phase < 240U) return 1319U;
+        if (phase >= 320U && phase < 560U) return 1568U;
+        if (phase >= 720U && phase < 800U) return 2093U;
     }
     return 0;
 }

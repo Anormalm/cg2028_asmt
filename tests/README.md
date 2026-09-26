@@ -90,3 +90,18 @@ full-buffer handling, buzzer rhythms and rejection flags. Receiver tests cover
 out-of-order/retried recording chunks, conflicts, authenticated CSV, incomplete
 uploads and persistent trial notes. These are synthetic software tests; they do
 not establish physical detection accuracy or prove buzzer timing on hardware.
+
+
+## PWM buzzer verification
+
+After the command-line firmware build, run `python tests/verify_buzzer_driver.py`.
+It executes the built ARM driver with emulated peripheral-register memory and
+checks PB1/AF2 selection, timer frequency/duty configuration, silence, invalid
+frequency bounds, repeated-note handling and APB clock prescaling. It does not
+simulate the timer's electrical waveform. `verify_core.py` checks exact melody
+notes/rests, descending acknowledgement, alarm preemption and tick wraparound.
+
+On hardware: double-tap B2 in NORMAL and listen for four rising notes. Hold B2
+for three seconds for Morse SOS, wait 15 seconds for the faster rising alarm,
+then release and hold B2 for one second to hear the descending acknowledgement.
+Repeat while Wi-Fi uploads and check `dtMax`; no busy-wait tone generation is used.

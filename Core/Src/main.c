@@ -9,6 +9,7 @@
 #include "main.h"
 #include "fall_detector.h"
 #include "alert_ui.h"
+#include "buzzer.h"
 #include "alert_network.h"
 #include "motion_capture.h"
 #include "FreeRTOS.h"
@@ -89,14 +90,7 @@ int main(void)
     }
     UART_Send("ElderCare: 50Hz; Ar/Af=mg Gr/Gf=mdps; B2: hold 3s for SOS, release+hold 1s to ACK; buzzer D6\r\n");
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin, GPIO_PIN_RESET);
-    GPIO_InitTypeDef buzzer = {0};
-    buzzer.Pin = ARD_D6_Pin;
-    buzzer.Mode = GPIO_MODE_OUTPUT_PP;
-    buzzer.Pull = GPIO_NOPULL;
-    buzzer.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(ARD_D6_GPIO_Port, &buzzer);
+    Buzzer_Init();
     if (!AlertNetwork_Init() ||
         xTaskCreate(SensorTask, "sensors", 1536, NULL, 3, NULL) != pdPASS ||
         xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS)
@@ -110,7 +104,7 @@ void App_Fatal(void)
 {
     __disable_irq();
     BSP_LED_On(LED2);
-    HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin, GPIO_PIN_RESET);
+    Buzzer_Stop();
     for (;;) { }
 }
 
@@ -286,8 +280,7 @@ static void SensorTask(void *argument)
             capture_outcome = detector.reason;
         MotionCapture_Add(&motion, capture_trigger, capture_outcome);
         int fall_detected = (detector.state == FD_FALL_LATCHED);
-        HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin,
-                         AlertUI_BuzzerOn(&alert_ui, now) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        Buzzer_SetFrequency(AlertUI_BuzzerHz(&alert_ui, now));
         AlertEvent message = {0};
         message.uptime_ms = now;
         message.incident = incident;
