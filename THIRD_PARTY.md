@@ -18,3 +18,17 @@ path to avoid duplicate driver definitions.
 
 Kernel sources are unmodified. The application supplies `FreeRTOSConfig.h`,
 HAL/RTOS SysTick integration, tasks and fault hooks.
+
+## VL53L0X proximity driver
+
+`Core/ToF` comes from STMicroelectronics/STM32CubeL4 commit
+`3c4aaa0c009cabf2f38409cd55728d8d4d9a0cc5`, directory
+`Projects/B-L475E-IOT01A/Applications/Proximity/Src/vl53l0x`.
+Source: https://github.com/STMicroelectronics/STM32CubeL4/tree/3c4aaa0c009cabf2f38409cd55728d8d4d9a0cc5/Projects/B-L475E-IOT01A/Applications/Proximity/Src/vl53l0x
+
+Original copyright notices are retained. The distribution license index is
+`Core/ToF/LICENSE.md`; the ST SLA0044 terms are in `ST-license-terms.txt`.
+The terms were retrieved from ST's official STM32CubeF1 `version-license.txt`,
+which reproduces SLA0044: https://github.com/STMicroelectronics/STM32CubeF1/blob/master/version-license.txt
+Changes in `vl53l0x_tof.c`: bounded I2C timeouts and removal of the unused
+blocking single-shot demonstration function.

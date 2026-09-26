@@ -19,6 +19,30 @@ import time
 
 TYPES = {'fall', 'sos', 'local_ack', 'heartbeat', 'rejected'}
 STATES = {'STARTUP', 'NORMAL', 'WAIT_IMPACT', 'CONFIRM', 'FALL'}
+SENSOR_DEFAULTS = dict(revision=1, proximity=1, sound=1, beeps=0,
+                       near_mm=300, far_mm=800, sound_threshold=-300)
+
+
+def validate_sensor(data):
+    if not isinstance(data, dict): raise ValueError('Expected sensor object')
+    for name, pattern in [('device',r'[A-Za-z0-9_-]{1,32}'),('boot',r'[0-9a-f]{16}')]:
+        if not isinstance(data.get(name),str) or not re.fullmatch(pattern,data[name]):
+            raise ValueError('Invalid '+name)
+    limits = {'seq':(1,0xFFFFFFFF),'uptime_ms':(0,0xFFFFFFFF),'config_revision':(0,2147483647),
+              'distance_mm':(-1,2000),'range_status':(-2,255),'proximity_active':(0,1),
+              'sound_dbfs':(-960,0),'sound_valid':(0,1),'sound_active':(0,1),'sound_masked':(0,1),
+              'sound_events':(0,0xFFFFFFFF),'audio_overruns':(0,0xFFFFFFFF),'mic_error':(0,255)}
+    for name,(low,high) in limits.items():
+        if type(data.get(name)) is not int or not low<=data[name]<=high: raise ValueError('Invalid '+name)
+
+
+def validate_sensor_config(c):
+    for key in ['proximity','sound','beeps','near_mm','far_mm','sound_threshold']:
+        if type(c.get(key)) is not int: raise ValueError('Invalid '+key)
+    if any(c[k] not in (0,1) for k in ['proximity','sound','beeps']): raise ValueError('Invalid switch')
+    if not 50<=c['near_mm']<=1000 or not c['near_mm']+100<=c['far_mm']<=2000:
+        raise ValueError('Near must be 50–1000 mm; warning distance must be at least 100 mm further, up to 2000 mm')
+    if not -800<=c['sound_threshold']<=-50: raise ValueError('Sound threshold must be -80 to -5 dBFS')
 
 
 def validate_event(event):
@@ -68,7 +92,52 @@ class Store:
             CREATE TABLE IF NOT EXISTS capture_parts (
                 device TEXT, boot TEXT, capture_id INTEGER, part INTEGER, samples TEXT,
                 PRIMARY KEY(device, boot, capture_id, part));
+            CREATE TABLE IF NOT EXISTS sensor_settings (device TEXT PRIMARY KEY, payload TEXT);
+            CREATE TABLE IF NOT EXISTS sensor_sessions (device TEXT, boot TEXT, PRIMARY KEY(device,boot));
+            CREATE TABLE IF NOT EXISTS sensor_latest (device TEXT PRIMARY KEY, boot TEXT, seq INTEGER, received REAL, payload TEXT);
+            CREATE TABLE IF NOT EXISTS sensor_samples (device TEXT, boot TEXT, seq INTEGER, received REAL, payload TEXT,
+                PRIMARY KEY(device,boot,seq));
         ''')
+
+    def sensor_config(self, device):
+        # Caller holds self.lock.
+        row=self.db.execute('SELECT payload FROM sensor_settings WHERE device=?',(device,)).fetchone()
+        return json.loads(row[0]) if row else dict(SENSOR_DEFAULTS)
+
+    def configure_sensors(self, data):
+        if not isinstance(data,dict): raise ValueError('Expected settings object')
+        device=data.get('device')
+        if not isinstance(device,str): raise ValueError('Invalid device')
+        validate_sensor_config(data)
+        with self.lock,self.db:
+            if not self.db.execute('SELECT 1 FROM sensor_latest WHERE device=?',(device,)).fetchone():
+                raise ValueError('Device has not reported sensor support yet')
+            previous=self.sensor_config(device)
+            if type(data.get('revision')) is not int or data['revision']!=previous['revision']: raise ValueError('Settings changed in another session; reload settings')
+            c={k:data[k] for k in SENSOR_DEFAULTS if k!='revision'}
+            c['revision']=previous['revision']+1
+            if c['revision']>2147483647: raise ValueError('Settings revision limit reached')
+            self.db.execute('INSERT OR REPLACE INTO sensor_settings VALUES(?,?)',(device,json.dumps(c)))
+        return c
+
+    def accept_sensors(self, data):
+        validate_sensor(data)
+        device,boot,seq=data['device'],data['boot'],data['seq']
+        payload=json.dumps(data,sort_keys=True)
+        now=time.time()
+        with self.lock,self.db:
+            old=self.db.execute('SELECT payload FROM sensor_samples WHERE device=? AND boot=? AND seq=?',(device,boot,seq)).fetchone()
+            if old and old[0]!=payload: raise ValueError('Sensor sequence reused with different contents')
+            known=self.db.execute('SELECT 1 FROM sensor_sessions WHERE device=? AND boot=?',(device,boot)).fetchone()
+            self.db.execute('INSERT OR IGNORE INTO sensor_sessions VALUES(?,?)',(device,boot))
+            self.db.execute('INSERT OR IGNORE INTO sensor_samples VALUES(?,?,?,?,?)',(device,boot,seq,now,payload))
+            latest=self.db.execute('SELECT boot,seq FROM sensor_latest WHERE device=?',(device,)).fetchone()
+            if not latest or not known or (latest[0]==boot and seq>latest[1]):
+                self.db.execute('INSERT OR REPLACE INTO sensor_latest VALUES(?,?,?,?,?)',(device,boot,seq,now,payload))
+            # Bounded rolling telemetry storage: keep the latest 1800 samples/device.
+            self.db.execute('DELETE FROM sensor_samples WHERE rowid IN (SELECT rowid FROM sensor_samples WHERE device=? ORDER BY received DESC LIMIT -1 OFFSET 1800)',(device,))
+            c=self.sensor_config(device)
+        return f'ACK {boot}-s{seq}\nCFG {c["revision"]} {c["proximity"]} {c["sound"]} {c["beeps"]} {c["near_mm"]} {c["far_mm"]} {c["sound_threshold"]}\n'
 
     def accept(self, event):
         validate_event(event)
@@ -190,7 +259,17 @@ class Store:
                 item.update(received=received, label=label, note=note, received_rows=received_rows,
                             complete=received_rows==item['total'])
                 captures.append(item)
-        return {'devices': devices, 'events': history, 'captures': captures, 'server_time': now}
+            sensors=[]
+            for device,boot,seq,received,payload in self.db.execute('SELECT * FROM sensor_latest ORDER BY device'):
+                item=json.loads(payload)
+                item.update(received=received,online=now-received<10,settings=self.sensor_config(device))
+                samples=[]
+                for seen,encoded in self.db.execute('SELECT received,payload FROM sensor_samples WHERE device=? AND boot=? ORDER BY seq DESC LIMIT 120',(device,boot)):
+                    p=json.loads(encoded)
+                    samples.append(dict(received=seen,uptime_ms=p['uptime_ms'],distance_mm=p['distance_mm'],sound_dbfs=p['sound_dbfs'],sound_valid=p['sound_valid'],sound_masked=p['sound_masked']))
+                item['history']=list(reversed(samples))
+                sensors.append(item)
+        return {'devices': devices, 'events': history, 'captures': captures, 'sensors':sensors, 'server_time': now}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -222,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path)
         static = {'/': ('index.html','text/html; charset=utf-8'),
                   '/app.js': ('app.js','text/javascript; charset=utf-8'),
+                  '/sensors.js': ('sensors.js','text/javascript; charset=utf-8'),
                   '/style.css': ('style.css','text/css; charset=utf-8')}
         if route.path in static:
             name, kind = static[route.path]
@@ -263,6 +343,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/notes':
                 self.server.store.annotate(event)
                 self.reply(200, '{"ok":true}')
+            elif self.path == '/api/sensors':
+                self.reply(200,self.server.store.accept_sensors(event),'text/plain')
+            elif self.path == '/api/sensor-settings':
+                self.reply(200,json.dumps(self.server.store.configure_sensors(event)))
             elif self.path == '/api/ack':
                 self.server.store.acknowledge(event['device'], event['boot'], event['incident'])
                 self.reply(200, '{"ok":true}')

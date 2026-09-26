@@ -6,6 +6,7 @@
 #include "alert_config.h"
 #include "alert_protocol.h"
 #include "motion_capture.h"
+#include "extra_sensors.h"
 #include "wifi.h"
 #include <stdio.h>
 #include <string.h>
@@ -116,7 +117,7 @@ static int ValidConfig(void)
     return strstr(ALERT_TOKEN, "REPLACE_") == NULL;
 }
 
-static int PostPayload(const char *path, const char *body, const char *expected)
+static int PostPayload(const char *path, const char *body, const char *expected, int sensor_reply)
 {
     char request[1300], response[512];
     int body_length = (int)strlen(body);
@@ -155,7 +156,7 @@ static int PostPayload(const char *path, const char *body, const char *expected)
                 network_http_status = (response[9]-'0')*100 +
                                       (response[10]-'0')*10 + response[11]-'0';
             network_step = NET_STEP_ACK;
-            if (AlertProtocol_IsAck(response, expected)) { success = 1; break; }
+            if (sensor_reply ? ExtraSensors_ParseReply(response, expected) : AlertProtocol_IsAck(response, expected)) { success = 1; break; }
             if (!got) vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
@@ -179,7 +180,7 @@ static int PostEvent(const AlertEvent *event)
         event->min_mg, event->peak_mg, event->peak_dps, (unsigned long)event->dropped, (unsigned long)event->rejection_flags);
     if (body_length < 0 || body_length >= (int)sizeof(body)) return 0;
     snprintf(expected, sizeof(expected), "ACK %s-%lu\n", boot_id, (unsigned long)event->sequence);
-    return PostPayload("/api/events", body, expected);
+    return PostPayload("/api/events", body, expected, 0);
 }
 
 static int PostCapture(uint32_t *part)
@@ -213,12 +214,32 @@ static int PostCapture(uint32_t *part)
     strcpy(body + used, "]}");
     snprintf(expected, sizeof(expected), "ACK %s-c%lu-%lu\n", boot_id,
              (unsigned long)info.id, (unsigned long)*part);
-    if (!PostPayload("/api/captures", body, expected)) return 0;
+    if (!PostPayload("/api/captures", body, expected, 0)) return 0;
     if (++*part * CAPTURE_CHUNK >= info.count) {
         MotionCapture_Release(info.id);
         *part = 0;
     }
     return 1;
+}
+
+static int PostSensors(void)
+{
+    SensorSnapshot s;
+    ExtraSensors_Get(&s);
+    uint32_t seq=NextSequence();
+    char body[650], expected[64];
+    int n=snprintf(body,sizeof(body),
+        "{\"device\":\"%s\",\"boot\":\"%s\",\"seq\":%lu,\"uptime_ms\":%lu,"
+        "\"config_revision\":%lu,\"distance_mm\":%d,\"range_status\":%d,\"proximity_active\":%d,"
+        "\"sound_dbfs\":%d,\"sound_valid\":%d,\"sound_active\":%d,\"sound_masked\":%d,"
+        "\"sound_events\":%lu,\"audio_overruns\":%lu,\"mic_error\":%d}",
+        ALERT_DEVICE_ID,boot_id,(unsigned long)seq,(unsigned long)s.uptime_ms,
+        (unsigned long)s.config_revision,s.distance_mm,s.range_status,s.proximity_active,
+        s.sound_dbfs,s.sound_valid,s.sound_active,s.sound_masked,
+        (unsigned long)s.sound_events,(unsigned long)s.audio_overruns,s.mic_error);
+    if(n<0 || n>=(int)sizeof(body)) return 0;
+    snprintf(expected,sizeof(expected),"ACK %s-s%lu\n",boot_id,(unsigned long)seq);
+    return PostPayload("/api/sensors",body,expected,1);
 }
 
 void AlertNetwork_Task(void *argument)
@@ -230,6 +251,7 @@ void AlertNetwork_Task(void *argument)
     }
     int connected = 0;
     uint32_t capture_part = 0;
+    uint32_t sensors_at = 0;
     uint32_t retry_ms = 1000U, heartbeat_at = HAL_GetTick();
     for (;;) {
         if (!connected) {
@@ -254,7 +276,11 @@ void AlertNetwork_Task(void *argument)
         int send_heartbeat = !queued &&
             (uint32_t)(HAL_GetTick() - heartbeat_at) >= ALERT_HEARTBEAT_MS;
         int result;
-        if (!queued && !send_heartbeat) {
+        int send_sensors = !queued && !send_heartbeat && (uint32_t)(HAL_GetTick()-sensors_at)>=1000U;
+        if (send_sensors) {
+            result=PostSensors();
+            sensors_at=HAL_GetTick();
+        } else if (!queued && !send_heartbeat) {
             result = PostCapture(&capture_part);
             if (result < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         } else {

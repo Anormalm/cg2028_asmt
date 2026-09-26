@@ -16,7 +16,7 @@ function matching(items) { return items.filter(x => !$('deviceFilter').value || 
 function page(name) {
   document.querySelectorAll('.page').forEach(x => x.hidden = x.id !== name);
   document.querySelectorAll('nav [data-page]').forEach(x => x.classList.toggle('selected', x.dataset.page === name));
-  $('pageTitle').textContent = {monitor:'Overview',trials:'Motion trials',events:'Event log'}[name];
+  $('pageTitle').textContent = {monitor:'Overview',sensors:'Sensors',trials:'Motion trials',events:'Event log'}[name];
 }
 document.querySelectorAll('[data-page]').forEach(x => x.onclick = () => page(x.dataset.page));
 function ackHTML(e) {
@@ -44,7 +44,7 @@ function render() {
   }).join('') : `<div class="all-clear"><div><h3>${!devices.length?'Waiting for a device':devices.some(d=>!d.online)?'Some devices are offline':'No active alerts'}</h3><p>${devices.some(d=>!d.online)?'An offline device’s current condition is unknown.':'Latest received state.'}</p></div></div>`;
   bindAck($('attention'));
   $('recent').innerHTML = events.slice(0,5).map(e => `<div class="activity-row"><time>${esc(new Date(e.received*1000).toLocaleTimeString())}</time><div><strong>${esc(human(e.type))}</strong><p>${esc(e.device)} · ${esc(human(e.reason))}</p></div></div>`).join('') || '<div class="empty">Events will appear here as they arrive.</div>';
-  renderEvents(); renderCaptures();
+  renderEvents(); renderCaptures(); renderSensors();
   if (!connected && state.devices.length) $('attention').innerHTML='<div class="alarm-card"><h3>Current status unavailable</h3><p>Displayed device states are stale. Reconnect to verify current status.</p></div>';
 }
 function filteredEvents() {
@@ -117,7 +117,7 @@ async function refresh() {
     const old=$('deviceFilter').value;$('deviceFilter').innerHTML='<option value="">All devices</option>'+state.devices.map(d=>`<option value="${esc(d.device)}">${esc(d.device)}</option>`).join('');$('deviceFilter').value=old;
     $('connectionDot').className='live';$('connectionLabel').textContent='Receiver connected';$('status').textContent='';
     $('updated').textContent='Updated '+new Date().toLocaleTimeString();render();
-  } catch(error) {connected=false;$('connectionDot').className='failed';$('connectionLabel').textContent='Receiver unavailable';$('status').textContent='Connection lost — displayed data is stale. '+error.message;$('attention').innerHTML='<div class="alarm-card"><h3>Current status unavailable</h3><p>Reconnect to the receiver to verify device status.</p></div>';throw error;}
+  } catch(error) {connected=false;renderSensors();$('connectionDot').className='failed';$('connectionLabel').textContent='Receiver unavailable';$('status').textContent='Connection lost — displayed data is stale. '+error.message;$('attention').innerHTML='<div class="alarm-card"><h3>Current status unavailable</h3><p>Reconnect to the receiver to verify device status.</p></div>';throw error;}
   finally {busy=false;}
 }
 $('connectionButton').onclick=()=>$('connectDialog').showModal();

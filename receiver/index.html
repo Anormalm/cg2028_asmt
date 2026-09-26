@@ -1,13 +1,28 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ElderCare alerts</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ElderCare alerts</title><link rel="stylesheet" href="/style.css"><script src="/sensors.js" defer></script><script src="/app.js" defer></script></head>
 <body>
-<header class="topbar"><a class="brand" href="#">ElderCare</a><nav aria-label="Views"><button data-page="monitor" class="selected">Monitor</button><button data-page="trials">Motion trials <span id="captureCount">0</span></button><button data-page="events">Event log</button></nav><button id="connectionButton" class="connection"><i id="connectionDot"></i><span id="connectionLabel">Not connected</span></button></header>
+<header class="topbar"><a class="brand" href="#">ElderCare</a><nav aria-label="Views"><button data-page="monitor" class="selected">Monitor</button><button data-page="sensors">Sensors</button><button data-page="trials">Motion trials <span id="captureCount">0</span></button><button data-page="events">Event log</button></nav><button id="connectionButton" class="connection"><i id="connectionDot"></i><span id="connectionLabel">Not connected</span></button></header>
 <main>
 <div class="page-heading"><div><h1 id="pageTitle">Overview</h1></div><div class="heading-actions"><select id="deviceFilter" aria-label="Filter by device"><option value="">All devices</option></select><button id="soundButton" class="quiet">Browser sound: off</button></div></div>
 <div id="status" role="status" class="statusline">Connect to your receiver to see device activity.</div>
 <section id="monitor" class="page">
 <div class="monitor-grid"><aside><div class="section-heading"><h2>Devices</h2><span id="deviceCount" class="muted">0 connected</span></div><div id="devices" class="device-list"></div><details class="instruction"><summary>Board controls</summary><dl><dt>Manual SOS</dt><dd>Hold B2 for 3 seconds while normal.</dd><dt>Clear the local alarm</dt><dd>Release B2, then hold for 1 second.</dd><dt>Play / stop melody</dt><dd>Double-tap B2 while normal.</dd></dl></details></aside><div><div class="section-heading"><h2>Alerts</h2></div><div id="attention"></div><div class="section-heading spaced"><h2>Recent activity</h2><button class="text-button" data-page="events">All events</button></div><div id="recent" class="recent"></div></div></div>
 </section>
+<section id="sensors" class="page" hidden>
+<div class="sensor-toolbar"><label>Device <select id="sensorDevice" aria-label="Sensor device"></select></label><span id="sensorUpdated" class="muted">Waiting for sensor data</span></div>
+<p id="sensorEmpty" class="empty">No sensor data yet. Build and flash the proximity/audio firmware, then resume the board.</p>
+<div id="sensorContent" hidden>
+<div class="sensor-grid">
+<article class="sensor-panel"><div class="section-heading"><h2>Proximity</h2><span id="proximityStatus" class="muted"></span></div><p class="sensor-reading" id="distanceValue">--</p><p class="muted">Distance in front of the board</p><div id="distancePlot"></div><p class="footnote">Invalid or out-of-range readings are left blank. Beeps speed up between the warning and near distances.</p></article>
+<article class="sensor-panel"><div class="section-heading"><h2>Sound activity</h2><span id="soundStatus" class="muted"></span></div><p class="sensor-reading" id="soundValue">--</p><p class="muted" id="soundCount"></p><div id="soundPlot"></div><p class="footnote">Relative digital level (dBFS), not calibrated sound pressure. Only levels and counts are sent; audio is not stored or streamed.</p></article>
+</div>
+<form id="sensorSettings" class="sensor-settings">
+<div class="section-heading"><h2>Sensor settings</h2><span id="settingsApplied" class="muted"></span></div>
+<div class="sensor-switches"><label><input id="proximityEnabled" type="checkbox"> Proximity monitoring</label><label><input id="proximityBeeps" type="checkbox"> Proximity beeps</label><label><input id="soundEnabled" type="checkbox"> Sound activity monitoring</label></div>
+<div class="sensor-fields"><label>Near distance (mm)<input id="nearDistance" type="number" min="50" max="1000" step="10" required></label><label>Warning distance (mm)<input id="farDistance" type="number" min="150" max="2000" step="10" required></label><label>Activity threshold (dBFS)<input id="soundThreshold" type="number" min="-80" max="-5" step="1" required></label></div>
+<div class="sensor-save"><button id="saveSensors" type="submit">Save settings</button><button id="reloadSensors" type="button" class="quiet">Reload settings</button><span id="sensorSaveStatus" role="status" class="muted"></span></div>
+<p class="footnote">Settings apply when the board next contacts this receiver. Fall/SOS alarms take priority. Activity counting ignores the board buzzer and 400 ms afterwards.</p>
+</form></div></section>
 <section id="trials" class="page" hidden>
 <div class="trial-intro"><p>Each recording contains up to 2 seconds before and 4 seconds after the trigger. Uploads run behind alarms and heartbeat messages.</p><span class="pill">50 Hz target &middot; 6 axes</span></div>
 <div class="trial-grid"><aside class="trial-list-panel"><div class="section-heading"><h2>Recordings</h2><select id="trialFilter" aria-label="Filter trials"><option value="">All trials</option><option value="unlabelled">Unlabelled</option><option value="fall_trial">Fall trial</option><option value="normal_activity">Normal activity</option><option value="false_alarm">False alarm</option><option value="missed_fall">Missed fall</option></select></div><div id="captures"></div></aside><div id="captureDetail" class="capture-detail"><div class="empty tall"><h3>Select a recording</h3><p>A controlled motion triggers a recording automatically. You can also set <code>debug_capture_request = 1</code> in CubeIDE.</p></div></div></div>

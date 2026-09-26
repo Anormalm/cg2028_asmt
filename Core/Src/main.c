@@ -12,6 +12,7 @@
 #include "buzzer.h"
 #include "alert_network.h"
 #include "motion_capture.h"
+#include "extra_sensors.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
@@ -93,6 +94,7 @@ int main(void)
     UART_Send("ElderCare: 50Hz; Ar/Af=mg Gr/Gf=mdps; B2: hold 3s for SOS, release+hold 1s to ACK; buzzer D6\r\n");
 
     Buzzer_Init();
+    ExtraSensors_Init();
     if (!AlertNetwork_Init() ||
         xTaskCreate(SensorTask, "sensors", 1536, NULL, 3, NULL) != pdPASS ||
         xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS)
@@ -287,7 +289,13 @@ static void SensorTask(void *argument)
             capture_outcome = detector.reason;
         MotionCapture_Add(&motion, capture_trigger, capture_outcome);
         int fall_detected = (detector.state == FD_FALL_LATCHED);
-        Buzzer_SetFrequency(AlertUI_BuzzerHz(&alert_ui, now));
+        ExtraSensors_Update(now);
+        uint32_t tone = AlertUI_BuzzerHz(&alert_ui, now);
+        /* Alarm and musical rests belong to their sequence, never fill them
+         * with proximity tones. Proximity warnings are NORMAL-only. */
+        if (detector.state == FD_NORMAL && !alert_ui.tuning && !alert_ui.chirping && !alert_ui.test_hz)
+            tone = ExtraSensors_ProximityTone(now);
+        Buzzer_SetFrequency(tone);
         AlertEvent message = {0};
         message.uptime_ms = now;
         message.incident = incident;

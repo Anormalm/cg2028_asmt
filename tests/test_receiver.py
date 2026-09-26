@@ -21,6 +21,12 @@ def event(seq=1, kind='fall', state='FALL'):
                 accel_mg=1000, gyro_dps=40, min_mg=900, peak_mg=1800,
                 peak_dps=150, dropped=0)
 
+def sensor(seq=1):
+    return dict(device='test-board',boot='0123456789abcdef',seq=seq,uptime_ms=2000,
+                config_revision=0,distance_mm=450,range_status=0,proximity_active=1,
+                sound_dbfs=-420,sound_valid=1,sound_active=0,sound_masked=0,
+                sound_events=2,audio_overruns=0,mic_error=0)
+
 
 class ReceiverTests(unittest.TestCase):
     def setUp(self):
@@ -139,6 +145,47 @@ class ReceiverTests(unittest.TestCase):
         sample.update(reason='no_rotation',rejection_flags=10)
         self.request('/api/events',sample)
         self.assertEqual(json.loads(self.request('/api/state'))['events'][0]['rejection_flags'],10)
+
+    def test_sensor_settings_delivery_and_confirmation(self):
+        self.assertEqual(self.request('/api/sensors',sensor()),b'ACK 0123456789abcdef-s1\nCFG 1 1 1 0 300 800 -300\n')
+        data=json.loads(self.request('/api/state'))['sensors'][0]
+        self.assertTrue(data['online'])
+        self.assertEqual(data['config_revision'],0)
+        self.assertEqual(data['settings']['revision'],1)
+        settings=dict(data['settings'],device='test-board',beeps=1,near_mm=200,far_mm=600,sound_threshold=-450)
+        saved=json.loads(self.request('/api/sensor-settings',settings))
+        self.assertEqual(saved['revision'],2)
+        with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensor-settings',settings)
+        second=sensor(2)
+        self.assertIn(b'CFG 2 1 1 1 200 600 -450\n',self.request('/api/sensors',second))
+        second=sensor(3);second['config_revision']=2
+        self.request('/api/sensors',second)
+        data=json.loads(self.request('/api/state'))['sensors'][0]
+        self.assertEqual(data['config_revision'],data['settings']['revision'])
+        self.assertEqual(len(data['history']),3)
+        reopened=receiver.Store(self.path)
+        self.assertEqual(reopened.state()['sensors'][0]['settings']['beeps'],1)
+        reopened.db.close()
+
+    def test_sensor_validation_retries_and_staleness(self):
+        self.request('/api/sensors',sensor())
+        self.request('/api/sensors',sensor())
+        self.assertEqual(len(json.loads(self.request('/api/state'))['sensors'][0]['history']),1)
+        bad=sensor();bad['distance_mm']=999
+        with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',bad)
+        for name,value in [('sound_dbfs',1),('distance_mm',-2),('sound_valid',True),('device','<script>')]:
+            bad=sensor(2);bad[name]=value
+            with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',bad)
+        with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',sensor(3),token='wrong')
+        bad=dict(receiver.SENSOR_DEFAULTS,device='test-board',near_mm=800,far_mm=700)
+        with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensor-settings',bad)
+        rebooted=sensor(1);rebooted['boot']='abcdef0123456789'
+        self.request('/api/sensors',rebooted)
+        self.request('/api/sensors',sensor(9))
+        self.assertEqual(json.loads(self.request('/api/state'))['sensors'][0]['boot'],rebooted['boot'])
+        with self.server.store.lock,self.server.store.db:
+            self.server.store.db.execute('UPDATE sensor_latest SET received=?',(time.time()-20,))
+        self.assertFalse(json.loads(self.request('/api/state'))['sensors'][0]['online'])
 
 
 if __name__ == '__main__':
