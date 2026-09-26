@@ -3,6 +3,7 @@
 #include <stdint.h>
 typedef struct {
     uint32_t alarm_since, press_since, chirp_since, tap_since, tune_since;
+    uint32_t test_since, test_hz;
     int alarm_active, holding, sos_armed, chirping, tap_pending, tuning, sos_pattern;
 } AlertUI;
 
@@ -12,12 +13,14 @@ typedef struct {
 static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
                           int normal, int alarm)
 {
-    if ((uint32_t)(now - u->tune_since) >= 800U) u->tuning = 0;
+    if ((uint32_t)(now - u->tune_since) >= 1200U) u->tuning = 0;
+    if ((uint32_t)(now - u->test_since) >= 1000U) u->test_hz = 0;
     if ((uint32_t)(now - u->chirp_since) >= 360U) u->chirping = 0;
     if (alarm && !u->alarm_active) {
         u->alarm_since = now;
         u->chirping = 0;
         u->tuning = u->tap_pending = u->sos_pattern = 0;
+        u->test_hz = 0;
     }
     if (!alarm && u->alarm_active) {
         u->chirp_since = now;
@@ -51,6 +54,15 @@ static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
     return 0;
 }
 
+/* A finite, isolated tone for diagnosing sound from CubeIDE. */
+static void AlertUI_TestTone(AlertUI *u, uint32_t now, uint32_t hz, int normal)
+{
+    if (!normal || u->alarm_active || hz < 100U || hz > 5000U) return;
+    u->test_since = now;
+    u->test_hz = hz;
+    u->tuning = u->chirping = 0;
+}
+
 /* Requested pitch in Hz; zero is silence. All sequencing is non-blocking. */
 static uint32_t AlertUI_BuzzerHz(const AlertUI *u, uint32_t now)
 {
@@ -76,13 +88,14 @@ static uint32_t AlertUI_BuzzerHz(const AlertUI *u, uint32_t now)
         if (phase >= 120U && phase < 220U) return 1568U;
         if (phase >= 240U && phase < 340U) return 1047U;
     }
+    if (u->test_hz && (uint32_t)(now - u->test_since) < 1000U) return u->test_hz;
     if (u->tuning) {
         uint32_t phase = (uint32_t)(now - u->tune_since);
-        /* Rising C6-E6-G6-C7 motif, with rests between notes. */
-        if (phase < 80U) return 1047U;
-        if (phase >= 160U && phase < 240U) return 1319U;
-        if (phase >= 320U && phase < 560U) return 1568U;
-        if (phase >= 720U && phase < 800U) return 2093U;
+        /* Lower C5-E5-G5-C6: 220 ms notes, 40 ms rests, 400 ms ending. */
+        if (phase < 220U) return 523U;
+        if (phase >= 260U && phase < 480U) return 659U;
+        if (phase >= 520U && phase < 740U) return 784U;
+        if (phase >= 780U && phase < 1180U) return 1047U;
     }
     return 0;
 }

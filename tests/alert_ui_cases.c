@@ -36,10 +36,10 @@ int alert_ui_test(void)
     AlertUI_Update(&u, 300, 1, 1, 0);
     AlertUI_Update(&u, 380, 0, 1, 0);
     CHECK(u.tuning && AlertUI_BuzzerHz(&u, 400));
-    CHECK(!AlertUI_BuzzerHz(&u, 500));
+    CHECK(!AlertUI_BuzzerHz(&u, 620));
     CHECK(AlertUI_BuzzerHz(&u, 800));
-    AlertUI_Update(&u, 1200, 0, 1, 0);
-    CHECK(!u.tuning && !AlertUI_BuzzerHz(&u, 1200));
+    AlertUI_Update(&u, 1580, 0, 1, 0);
+    CHECK(!u.tuning && !AlertUI_BuzzerHz(&u, 1580));
     AlertUI_Update(&u, 1300, 0, 0, 1);
     u.sos_pattern = 1;
     CHECK(AlertUI_BuzzerHz(&u, 1300));
@@ -53,12 +53,12 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 16500) == 2093U);
     CHECK(AlertUI_BuzzerHz(&u, 16700) == 2637U);
     u = (AlertUI){.tuning=1, .tune_since=100};
-    CHECK(AlertUI_BuzzerHz(&u, 100) == 1047U);
-    CHECK(AlertUI_BuzzerHz(&u, 180) == 0U);
-    CHECK(AlertUI_BuzzerHz(&u, 260) == 1319U);
-    CHECK(AlertUI_BuzzerHz(&u, 420) == 1568U);
-    CHECK(AlertUI_BuzzerHz(&u, 820) == 2093U);
-    CHECK(AlertUI_BuzzerHz(&u, 900) == 0U);
+    CHECK(AlertUI_BuzzerHz(&u, 100) == 523U);
+    CHECK(AlertUI_BuzzerHz(&u, 320) == 0U);
+    CHECK(AlertUI_BuzzerHz(&u, 360) == 659U);
+    CHECK(AlertUI_BuzzerHz(&u, 620) == 784U);
+    CHECK(AlertUI_BuzzerHz(&u, 880) == 1047U);
+    CHECK(AlertUI_BuzzerHz(&u, 1280) == 0U);
     AlertUI_Update(&u, 500, 0, 0, 1); /* Alarm preempts a melody. */
     CHECK(!u.tuning && AlertUI_BuzzerHz(&u, 500) == 1568U);
     AlertUI_Update(&u, 1000, 0, 0, 0);
@@ -68,6 +68,24 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 1240) == 1047U);
     CHECK(AlertUI_BuzzerHz(&u, 1340) == 0U);
     u = (AlertUI){.tuning=1, .tune_since=UINT32_MAX-99U};
-    CHECK(AlertUI_BuzzerHz(&u, 60) == 1319U); /* Notes survive tick wrap. */
+    CHECK(AlertUI_BuzzerHz(&u, 160) == 659U); /* Notes survive tick wrap. */
+    u = (AlertUI){0};
+    AlertUI_TestTone(&u, UINT32_MAX-499U, 523U, 1);
+    CHECK(AlertUI_BuzzerHz(&u, 499U) == 523U);
+    CHECK(AlertUI_BuzzerHz(&u, 500U) == 0U);
+    AlertUI_Update(&u, 500U, 0, 1, 0);
+    CHECK(!u.test_hz);
+    AlertUI_TestTone(&u, 600U, 99U, 1);
+    CHECK(!u.test_hz);
+    AlertUI_TestTone(&u, 600U, 5001U, 1);
+    CHECK(!u.test_hz);
+    AlertUI_TestTone(&u, 600U, 1047U, 0);
+    CHECK(!u.test_hz);
+    AlertUI_TestTone(&u, 600U, 1047U, 1);
+    CHECK(AlertUI_BuzzerHz(&u, 600U) == 1047U);
+    AlertUI_Update(&u, 620U, 0, 0, 1);
+    CHECK(!u.test_hz && AlertUI_BuzzerHz(&u, 620U) == 1568U);
+    AlertUI_TestTone(&u, 640U, 523U, 1);
+    CHECK(!u.test_hz); /* A diagnostic cannot override an alarm. */
     return 0;
 }

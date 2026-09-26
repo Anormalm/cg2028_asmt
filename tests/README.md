@@ -105,3 +105,9 @@ On hardware: double-tap B2 in NORMAL and listen for four rising notes. Hold B2
 for three seconds for Morse SOS, wait 15 seconds for the faster rising alarm,
 then release and hold B2 for one second to hear the descending acknowledgement.
 Repeat while Wi-Fi uploads and check `dtMax`; no busy-wait tone generation is used.
+
+The revised sound test uses lower 523/659/784/1047 Hz notes and consistent rests.
+`debug_buzzer_test_hz` supplies a one-second isolated pitch test in NORMAL.
+The UI tests cover diagnostic timeout across tick wraparound, invalid requests,
+NORMAL-only gating and alarm preemption. Compare the revised test by listening
+on the actual module; PWM register tests cannot establish perceived sound quality.

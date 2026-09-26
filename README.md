@@ -86,11 +86,11 @@ Open UART at **115200, 8-N-1, no flow control**. After startup settling, expect
 | Normal operation | Silent buzzer, slow LED, heartbeat about every 10 s |
 | Hold blue B2 for 3 s in NORMAL | Manual SOS, fast LED, audible alarm, queued SOS event |
 | Confirmed simulated fall | Fast LED, audible alarm, queued fall event |
-| Double-tap B2 in NORMAL | Rising C6?E6?G6?C7 melody |
+| Double-tap B2 in NORMAL | Rising C5-E5-G5-C6 melody |
 | First 15 s of a fall alarm | Alternating 1568/2093 Hz, two 100 ms notes every 2 s |
 | First 15 s of manual SOS | Morse SOS at 2093 Hz: three short, three long, three short |
 | Alarm unresolved after 15 s | Three rising notes (1568/2093/2637 Hz) every 1 s |
-| Release B2, then hold 1 s during an alarm | Local acknowledgement, descending C7?G6?C6 melody, settling then NORMAL |
+| Release B2, then hold 1 s during an alarm | Local acknowledgement, descending C7-G6-C6 melody, settling then NORMAL |
 | Short B2 tap during alarm | Alarm remains latched |
 | Caregiver clicks Mark seen | Dashboard records it; board alarm remains active |
 | Stop receiver or disconnect Wi-Fi | Local sensing/LED/buzzer/button continue; delivery retries |
@@ -224,10 +224,12 @@ The timer generates approximately 50% duty PWM using a 1 MHz counter, with
 rounded periods for each requested pitch. TIM3 is reserved for the buzzer;
 do not let another enhancement reconfigure this timer or PB1.
 
-Two short B2 taps (each 40?350 ms, releases within 500 ms) play a rising
-C6?E6?G6?C7 motif (1047, 1319, 1568, 2093 Hz). Manual SOS retains its Morse rhythm
+Two short B2 taps (each 40-350 ms, releases within 500 ms) play a rising
+C5-E5-G5-C6 motif (523, 659, 784, 1047 Hz). The first three notes last
+220 ms with 40 ms rests; the final note lasts 400 ms. This replaces the earlier
+higher, uneven chirp-like test sequence. Manual SOS retains its Morse rhythm
 at 2093 Hz; fall alarms alternate 1568/2093 Hz. Both escalate after 15 seconds to
-three rising notes every second. Local acknowledgement plays C7?G6?C6 over
+three rising notes every second. Local acknowledgement plays C7-G6-C6 over
 340 ms, including rests. Alarm onset cancels a test melody immediately on the
 next sensor update. Holding B2 retains its SOS/acknowledgement behaviour.
 
@@ -247,3 +249,18 @@ Seeed documents PWM tone control for the
 [Grove Buzzer](https://wiki.seeedstudio.com/Grove-Buzzer/). Audible pitch and volume
 still require verification on the actual module. Build and flash this firmware,
 then double-tap B2 in NORMAL before testing SOS, escalation and acknowledgement.
+
+
+### Diagnosing the sound in CubeIDE
+
+While the board is running in NORMAL, set `debug_buzzer_test_hz` to `523`.
+It plays that pitch for one second and resets the request to zero. Repeat with
+`784` and `1047`, waiting for each tone to finish. Read `buzzer_frequency_hz` to
+see the current requested output. Requests outside 100-5000 Hz or outside NORMAL
+are ignored; an alarm immediately preempts the test. Do not pause the CPU while
+listening, since debugger halts also pause the one-second timeout.
+
+Different pitches that sound harsh suggest the note range/timbre needs adjustment;
+identical pitches, severe distortion or uneven sustained tones need further
+hardware/timing checks. A lower melody is an acoustic tuning attempt, not proof
+that the actual sound has been verified remotely. The alarm pitches are unchanged.

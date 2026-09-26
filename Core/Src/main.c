@@ -43,6 +43,8 @@ UART_HandleTypeDef huart1;
 
 static FallDetector detector;
 static AlertUI alert_ui;
+/* Set to a frequency in Live Expressions; consumed once, NORMAL only. */
+volatile uint32_t debug_buzzer_test_hz;
 volatile int app_scheduler_running;
 static void SensorTask(void *argument);
 
@@ -245,6 +247,11 @@ static void SensorTask(void *argument)
             detector.peak_gyro = gyro_magnitude;
             AlertUI_Update(&alert_ui, now, pressed, 0, 1);
             alert_ui.sos_pattern = 1;
+        }
+        if (debug_buzzer_test_hz) {
+            uint32_t requested_hz = debug_buzzer_test_hz;
+            debug_buzzer_test_hz = 0;
+            AlertUI_TestTone(&alert_ui, now, requested_hz, detector.state == FD_NORMAL);
         }
         MotionSample motion = {0};
         motion.time_ms = now;

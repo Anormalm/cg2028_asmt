@@ -32,7 +32,7 @@ assert read(tim+0x28) == 79  # PSC: 80 MHz -> 1 MHz
 assert (read(gpio) >> 2) & 3 == 2  # PB1 alternate-function mode
 assert (read(gpio+0x20) >> 4) & 15 == 2  # AF2
 assert read(tim+0x20) & (1 << 12)  # CC4E
-for hz in [1047, 1319, 1568, 2093, 2637, 100, 5000]:
+for hz in [523, 659, 784, 1047, 1319, 1568, 2093, 2637, 100, 5000]:
     invoke('Buzzer_SetFrequency', hz)
     period = read(tim+0x2C)+1
     assert abs(1000000/period-hz)/hz < 0.005
