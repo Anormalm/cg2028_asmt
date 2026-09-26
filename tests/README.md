@@ -101,13 +101,18 @@ frequency bounds, repeated-note handling and APB clock prescaling. It does not
 simulate the timer's electrical waveform. `verify_core.py` checks exact melody
 notes/rests, descending acknowledgement, alarm preemption and tick wraparound.
 
-On hardware: double-tap B2 in NORMAL and listen for four rising notes. Hold B2
+On hardware: double-tap B2 in NORMAL and listen for the supplied Mario-style sequence. Hold B2
 for three seconds for Morse SOS, wait 15 seconds for the faster rising alarm,
 then release and hold B2 for one second to hear the descending acknowledgement.
 Repeat while Wi-Fi uploads and check `dtMax`; no busy-wait tone generation is used.
 
-The revised sound test uses lower 523/659/784/1047 Hz notes and consistent rests.
+The double-tap melody uses the complete supplied 156-note sequence.
 `debug_buzzer_test_hz` supplies a one-second isolated pitch test in NORMAL.
 The UI tests cover diagnostic timeout across tick wraparound, invalid requests,
 NORMAL-only gating and alarm preemption. Compare the revised test by listening
 on the actual module; PWM register tests cannot establish perceived sound quality.
+
+Melody tests check all 156 note starts, note ends and rests, total duration,
+first-phrase frequencies, tick wraparound, single-pass completion, double-tap
+stop control and alarm interruption. The 20 ms scheduling resolution still needs
+on-board listening/timing verification while networking is active.

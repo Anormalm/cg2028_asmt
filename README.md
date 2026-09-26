@@ -86,7 +86,7 @@ Open UART at **115200, 8-N-1, no flow control**. After startup settling, expect
 | Normal operation | Silent buzzer, slow LED, heartbeat about every 10 s |
 | Hold blue B2 for 3 s in NORMAL | Manual SOS, fast LED, audible alarm, queued SOS event |
 | Confirmed simulated fall | Fast LED, audible alarm, queued fall event |
-| Double-tap B2 in NORMAL | Rising C5-E5-G5-C6 melody |
+| Double-tap B2 in NORMAL | Play/stop the supplied Mario-style melody |
 | First 15 s of a fall alarm | Alternating 1568/2093 Hz, two 100 ms notes every 2 s |
 | First 15 s of manual SOS | Morse SOS at 2093 Hz: three short, three long, three short |
 | Alarm unresolved after 15 s | Three rising notes (1568/2093/2637 Hz) every 1 s |
@@ -224,14 +224,21 @@ The timer generates approximately 50% duty PWM using a 1 MHz counter, with
 rounded periods for each requested pitch. TIM3 is reserved for the buzzer;
 do not let another enhancement reconfigure this timer or PB1.
 
-Two short B2 taps (each 40-350 ms, releases within 500 ms) play a rising
-C5-E5-G5-C6 motif (523, 659, 784, 1047 Hz). The first three notes last
-220 ms with 40 ms rests; the final note lasts 400 ms. This replaces the earlier
-higher, uneven chirp-like test sequence. Manual SOS retains its Morse rhythm
-at 2093 Hz; fall alarms alternate 1568/2093 Hz. Both escalate after 15 seconds to
-three rising notes every second. Local acknowledgement plays C7-G6-C6 over
-340 ms, including rests. Alarm onset cancels a test melody immediately on the
-next sensor update. Holding B2 retains its SOS/acknowledgement behaviour.
+Two short B2 taps (each 40-350 ms, releases within 500 ms) start the complete
+user-supplied Mario-style beep sequence. Double-tap again to stop it. The sequence
+contains 156 notes and lasts 56.085 seconds including the final rest. It plays
+once, rather than looping. Frequencies, note lengths and following rests are
+stored in `Core/Inc/buzzer_melody.h`; each supplied delay means silence AFTER its
+beep. Actual note edges are serviced on the sensor task's 20 ms schedule, so
+requested durations such as 50 or 575 ms are quantized to that schedule. Absolute
+offsets prevent cumulative timing drift across the song.
+
+Manual SOS retains its Morse rhythm at 2093 Hz; fall alarms alternate
+1568/2093 Hz. Both escalate after 15 seconds to three rising notes every second.
+Local acknowledgement plays C7-G6-C6 over 340 ms including rests. Alarm onset
+cancels music on the next sensor update, and music does not resume afterwards.
+Holding B2 retains its SOS/acknowledgement behaviour. An isolated debugger tone
+also cancels the song, so diagnostic pitches do not mix with music.
 
 `Core/Src/buzzer.c` programs TIM3 directly using the supplied CMSIS/HAL headers;
 it needs no timer interrupt, DMA or extra HAL TIM source. The sensor task selects
@@ -262,5 +269,4 @@ listening, since debugger halts also pause the one-second timeout.
 
 Different pitches that sound harsh suggest the note range/timbre needs adjustment;
 identical pitches, severe distortion or uneven sustained tones need further
-hardware/timing checks. A lower melody is an acoustic tuning attempt, not proof
-that the actual sound has been verified remotely. The alarm pitches are unchanged.
+hardware/timing checks. The actual sound must still be checked on the module. The alarm pitches are unchanged.

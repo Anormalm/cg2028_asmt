@@ -1,6 +1,7 @@
 #ifndef ALERT_UI_H
 #define ALERT_UI_H
 #include <stdint.h>
+#include "buzzer_melody.h"
 typedef struct {
     uint32_t alarm_since, press_since, chirp_since, tap_since, tune_since;
     uint32_t test_since, test_hz;
@@ -13,7 +14,7 @@ typedef struct {
 static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
                           int normal, int alarm)
 {
-    if ((uint32_t)(now - u->tune_since) >= 1200U) u->tuning = 0;
+    if ((uint32_t)(now - u->tune_since) >= BUZZER_MELODY_DURATION_MS) u->tuning = 0;
     if ((uint32_t)(now - u->test_since) >= 1000U) u->test_hz = 0;
     if ((uint32_t)(now - u->chirp_since) >= 360U) u->chirping = 0;
     if (alarm && !u->alarm_active) {
@@ -28,12 +29,14 @@ static int AlertUI_Update(AlertUI *u, uint32_t now, int pressed,
     }
     u->alarm_active = alarm;
     if (!pressed) {
-        /* Two deliberate short taps in NORMAL play a short rhythm test. */
+        /* Two deliberate short taps in NORMAL toggle the supplied melody. */
         uint32_t held = (uint32_t)(now - u->press_since);
         if (normal && !alarm && u->holding && held >= 40U && held <= 350U) {
             if (u->tap_pending && (uint32_t)(now - u->tap_since) <= 500U) {
                 u->tune_since = now;
-                u->tuning = 1;
+                u->tuning = !u->tuning;
+                u->test_hz = 0;
+                u->chirping = 0;
                 u->tap_pending = 0;
             } else { u->tap_since = now; u->tap_pending = 1; }
         }
@@ -91,11 +94,7 @@ static uint32_t AlertUI_BuzzerHz(const AlertUI *u, uint32_t now)
     if (u->test_hz && (uint32_t)(now - u->test_since) < 1000U) return u->test_hz;
     if (u->tuning) {
         uint32_t phase = (uint32_t)(now - u->tune_since);
-        /* Lower C5-E5-G5-C6: 220 ms notes, 40 ms rests, 400 ms ending. */
-        if (phase < 220U) return 523U;
-        if (phase >= 260U && phase < 480U) return 659U;
-        if (phase >= 520U && phase < 740U) return 784U;
-        if (phase >= 780U && phase < 1180U) return 1047U;
+        return BuzzerMelody_Hz(phase);
     }
     return 0;
 }

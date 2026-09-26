@@ -37,9 +37,10 @@ int alert_ui_test(void)
     AlertUI_Update(&u, 380, 0, 1, 0);
     CHECK(u.tuning && AlertUI_BuzzerHz(&u, 400));
     CHECK(!AlertUI_BuzzerHz(&u, 620));
-    CHECK(AlertUI_BuzzerHz(&u, 800));
-    AlertUI_Update(&u, 1580, 0, 1, 0);
-    CHECK(!u.tuning && !AlertUI_BuzzerHz(&u, 1580));
+    CHECK(AlertUI_BuzzerHz(&u, 1080));
+    AlertUI_Update(&u, 380U + BUZZER_MELODY_DURATION_MS, 0, 1, 0);
+    CHECK(!u.tuning && !AlertUI_BuzzerHz(&u, 380U + BUZZER_MELODY_DURATION_MS));
+    u = (AlertUI){0};
     AlertUI_Update(&u, 1300, 0, 0, 1);
     u.sos_pattern = 1;
     CHECK(AlertUI_BuzzerHz(&u, 1300));
@@ -53,12 +54,23 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 16500) == 2093U);
     CHECK(AlertUI_BuzzerHz(&u, 16700) == 2637U);
     u = (AlertUI){.tuning=1, .tune_since=100};
-    CHECK(AlertUI_BuzzerHz(&u, 100) == 523U);
-    CHECK(AlertUI_BuzzerHz(&u, 320) == 0U);
-    CHECK(AlertUI_BuzzerHz(&u, 360) == 659U);
-    CHECK(AlertUI_BuzzerHz(&u, 620) == 784U);
-    CHECK(AlertUI_BuzzerHz(&u, 880) == 1047U);
-    CHECK(AlertUI_BuzzerHz(&u, 1280) == 0U);
+    CHECK(BUZZER_MELODY_NOTES == 156U);
+    CHECK(BUZZER_MELODY_DURATION_MS == 56085U);
+    CHECK(AlertUI_BuzzerHz(&u, 100) == 660U);
+    CHECK(AlertUI_BuzzerHz(&u, 200) == 0U);
+    CHECK(AlertUI_BuzzerHz(&u, 350) == 660U);
+    CHECK(AlertUI_BuzzerHz(&u, 750) == 660U);
+    CHECK(AlertUI_BuzzerHz(&u, 1150) == 510U);
+    CHECK(AlertUI_BuzzerHz(&u, 1750) == 770U);
+    CHECK(AlertUI_BuzzerHz(&u, 2400) == 380U);
+    /* Every tone ends in silence, including the last; no blocking or looping. */
+    for (uint32_t i = 0; i < BUZZER_MELODY_NOTES; ++i) {
+        const BuzzerNote *n = &buzzer_melody[i];
+        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms) == n->hz);
+        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms+n->on_ms-1U) == n->hz);
+        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms+n->on_ms) == 0U);
+    }
+    CHECK(AlertUI_BuzzerHz(&u, 100U+BUZZER_MELODY_DURATION_MS) == 0U);
     AlertUI_Update(&u, 500, 0, 0, 1); /* Alarm preempts a melody. */
     CHECK(!u.tuning && AlertUI_BuzzerHz(&u, 500) == 1568U);
     AlertUI_Update(&u, 1000, 0, 0, 0);
@@ -68,7 +80,7 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 1240) == 1047U);
     CHECK(AlertUI_BuzzerHz(&u, 1340) == 0U);
     u = (AlertUI){.tuning=1, .tune_since=UINT32_MAX-99U};
-    CHECK(AlertUI_BuzzerHz(&u, 160) == 659U); /* Notes survive tick wrap. */
+    CHECK(AlertUI_BuzzerHz(&u, 160) == 660U); /* Notes survive tick wrap. */
     u = (AlertUI){0};
     AlertUI_TestTone(&u, UINT32_MAX-499U, 523U, 1);
     CHECK(AlertUI_BuzzerHz(&u, 499U) == 523U);
@@ -87,5 +99,17 @@ int alert_ui_test(void)
     CHECK(!u.test_hz && AlertUI_BuzzerHz(&u, 620U) == 1568U);
     AlertUI_TestTone(&u, 640U, 523U, 1);
     CHECK(!u.test_hz); /* A diagnostic cannot override an alarm. */
+    u = (AlertUI){0};
+    AlertUI_Update(&u, 0, 0, 1, 0);
+    AlertUI_Update(&u, 100, 1, 1, 0);
+    AlertUI_Update(&u, 180, 0, 1, 0);
+    AlertUI_Update(&u, 300, 1, 1, 0);
+    AlertUI_Update(&u, 380, 0, 1, 0);
+    CHECK(u.tuning);
+    AlertUI_Update(&u, 1000, 1, 1, 0);
+    AlertUI_Update(&u, 1080, 0, 1, 0);
+    AlertUI_Update(&u, 1200, 1, 1, 0);
+    AlertUI_Update(&u, 1280, 0, 1, 0);
+    CHECK(!u.tuning && !AlertUI_BuzzerHz(&u, 1280));
     return 0;
 }
