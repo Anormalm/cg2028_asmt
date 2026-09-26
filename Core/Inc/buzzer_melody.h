@@ -163,14 +163,17 @@ static const BuzzerNote buzzer_melody[] = {
     {54760U, 770U, 100U}, /* rest 550 ms */
     {55410U, 380U, 100U}, /* rest 575 ms */
 };
-#define BUZZER_MELODY_DURATION_MS 56085U
+/* Preserve the supplied score; playback is 3/2 speed and one octave up. */
+#define BUZZER_MELODY_DURATION_MS 37390U
 #define BUZZER_MELODY_NOTES (sizeof(buzzer_melody) / sizeof(buzzer_melody[0]))
 static uint32_t BuzzerMelody_Hz(uint32_t elapsed)
 {
+    if (elapsed >= BUZZER_MELODY_DURATION_MS) return 0;
+    elapsed = elapsed * 3U / 2U;
     for (uint32_t i = 0; i < BUZZER_MELODY_NOTES; ++i) {
         const BuzzerNote *note = &buzzer_melody[i];
         if (elapsed < note->start_ms) return 0;
-        if (elapsed - note->start_ms < note->on_ms) return note->hz;
+        if (elapsed - note->start_ms < note->on_ms) return note->hz * 2U;
     }
     return 0;
 }

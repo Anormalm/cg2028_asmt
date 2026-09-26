@@ -55,20 +55,22 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 16700) == 2637U);
     u = (AlertUI){.tuning=1, .tune_since=100};
     CHECK(BUZZER_MELODY_NOTES == 156U);
-    CHECK(BUZZER_MELODY_DURATION_MS == 56085U);
-    CHECK(AlertUI_BuzzerHz(&u, 100) == 660U);
+    CHECK(BUZZER_MELODY_DURATION_MS == 37390U);
+    CHECK(AlertUI_BuzzerHz(&u, 100) == 1320U);
     CHECK(AlertUI_BuzzerHz(&u, 200) == 0U);
-    CHECK(AlertUI_BuzzerHz(&u, 350) == 660U);
-    CHECK(AlertUI_BuzzerHz(&u, 750) == 660U);
-    CHECK(AlertUI_BuzzerHz(&u, 1150) == 510U);
-    CHECK(AlertUI_BuzzerHz(&u, 1750) == 770U);
-    CHECK(AlertUI_BuzzerHz(&u, 2400) == 380U);
+    CHECK(AlertUI_BuzzerHz(&u, 267) == 1320U);
+    CHECK(AlertUI_BuzzerHz(&u, 534) == 1320U);
+    CHECK(AlertUI_BuzzerHz(&u, 800) == 1020U);
+    CHECK(AlertUI_BuzzerHz(&u, 1200) == 1540U);
+    CHECK(AlertUI_BuzzerHz(&u, 1634) == 760U);
     /* Every tone ends in silence, including the last; no blocking or looping. */
     for (uint32_t i = 0; i < BUZZER_MELODY_NOTES; ++i) {
         const BuzzerNote *n = &buzzer_melody[i];
-        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms) == n->hz);
-        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms+n->on_ms-1U) == n->hz);
-        CHECK(AlertUI_BuzzerHz(&u, 100U+n->start_ms+n->on_ms) == 0U);
+        uint32_t start = (2U*n->start_ms+2U)/3U;
+        uint32_t end = (2U*(n->start_ms+n->on_ms)+2U)/3U;
+        CHECK(AlertUI_BuzzerHz(&u, 100U+start) == 2U*n->hz);
+        CHECK(AlertUI_BuzzerHz(&u, 100U+end-1U) == 2U*n->hz);
+        CHECK(AlertUI_BuzzerHz(&u, 100U+end) == 0U);
     }
     CHECK(AlertUI_BuzzerHz(&u, 100U+BUZZER_MELODY_DURATION_MS) == 0U);
     AlertUI_Update(&u, 500, 0, 0, 1); /* Alarm preempts a melody. */
@@ -80,7 +82,7 @@ int alert_ui_test(void)
     CHECK(AlertUI_BuzzerHz(&u, 1240) == 1047U);
     CHECK(AlertUI_BuzzerHz(&u, 1340) == 0U);
     u = (AlertUI){.tuning=1, .tune_since=UINT32_MAX-99U};
-    CHECK(AlertUI_BuzzerHz(&u, 160) == 660U); /* Notes survive tick wrap. */
+    CHECK(AlertUI_BuzzerHz(&u, 67) == 1320U); /* Notes survive tick wrap. */
     u = (AlertUI){0};
     AlertUI_TestTone(&u, UINT32_MAX-499U, 523U, 1);
     CHECK(AlertUI_BuzzerHz(&u, 499U) == 523U);

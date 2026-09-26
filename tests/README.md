@@ -116,3 +116,6 @@ Melody tests check all 156 note starts, note ends and rests, total duration,
 first-phrase frequencies, tick wraparound, single-pass completion, double-tap
 stop control and alarm interruption. The 20 ms scheduling resolution still needs
 on-board listening/timing verification while networking is active.
+
+Melody playback is now 1.5x speed and one octave higher. Tests verify scaled
+boundaries and doubled frequencies for all notes, with a 37.390-second duration.

@@ -226,11 +226,13 @@ do not let another enhancement reconfigure this timer or PB1.
 
 Two short B2 taps (each 40-350 ms, releases within 500 ms) start the complete
 user-supplied Mario-style beep sequence. Double-tap again to stop it. The sequence
-contains 156 notes and lasts 56.085 seconds including the final rest. It plays
+contains 156 notes and now plays at 1.5x speed, one octave higher (twice the frequency).
+It lasts 37.390 seconds including the final rest. It plays
 once, rather than looping. Frequencies, note lengths and following rests are
-stored in `Core/Inc/buzzer_melody.h`; each supplied delay means silence AFTER its
+stored unchanged in `Core/Inc/buzzer_melody.h` and scaled during playback; each
+supplied delay means silence AFTER its
 beep. Actual note edges are serviced on the sensor task's 20 ms schedule, so
-requested durations such as 50 or 575 ms are quantized to that schedule. Absolute
+tempo-scaled durations are quantized to that schedule. Absolute
 offsets prevent cumulative timing drift across the song.
 
 Manual SOS retains its Morse rhythm at 2093 Hz; fall alarms alternate
