@@ -35,6 +35,7 @@ typedef struct {
     float reference[3], reference_magnitude;
     /* Retained after an event for UART inspection, reset on next candidate. */
     float min_accel, peak_accel, peak_gyro;
+    uint32_t rejection_flags, max_quiet_ms, max_posture_ms;
     const char *reason;
 } FallDetector;
 
@@ -71,6 +72,7 @@ static void FallDetector_Update(FallDetector *d, const float a[3],
         } else {
             FallDetector_Init(d, now);
             d->reason = "sample_gap";
+            d->rejection_flags = 32U;
         }
     }
     d->last_sample = now;
@@ -124,6 +126,7 @@ static void FallDetector_Update(FallDetector *d, const float a[3],
                 d->low_g_seen = accel < FD_LOW_ACCEL;
                 d->rotation_seen = d->rotation_recent;
                 d->quiet_tracking = d->posture_tracking = 0;
+                d->rejection_flags = d->max_quiet_ms = d->max_posture_ms = 0;
                 d->min_accel = d->peak_accel = accel;
                 d->peak_gyro = gyro;
                 d->state_since = now;
@@ -138,6 +141,7 @@ static void FallDetector_Update(FallDetector *d, const float a[3],
                 d->state_since = now;
                 d->reference_tracking = d->reference_valid = 0;
                 d->reason = "no_impact";
+                d->rejection_flags = 1U;
             } else if (accel >= FD_IMPACT_ACCEL) {
                 d->state_since = now;
                 d->state = FD_CONFIRM;
@@ -148,15 +152,23 @@ static void FallDetector_Update(FallDetector *d, const float a[3],
             if ((uint32_t)(now - d->state_since) <= 300U && d->rotation_recent)
                 d->rotation_seen = 1;
             if ((uint32_t)(now - d->state_since) > FD_CONFIRM_WINDOW_MS) {
+                d->rejection_flags = (!d->rotation_seen ? 2U : 0U) |
+                    (!d->reference_valid ? 4U : 0U) |
+                    (d->max_quiet_ms < FD_QUIET_MS ? 8U : 0U) |
+                    (d->max_posture_ms < FD_POSTURE_MS ? 16U : 0U);
+                d->reason = !d->rotation_seen ? "no_rotation" :
+                    (!d->low_g_seen && !d->reference_valid) ? "no_reference" :
+                    !d->low_g_seen && !d->max_posture_ms ? "no_posture" : "confirmation_short";
                 d->state = FD_STARTUP;
                 d->state_since = now;
                 d->reference_tracking = d->reference_valid = 0;
-                d->reason = "unconfirmed";
                 break;
             }
             if (quiet) {
                 if (!d->quiet_tracking) d->quiet_since = now;
                 d->quiet_tracking = 1;
+                uint32_t held = (uint32_t)(now - d->quiet_since);
+                if (held > d->max_quiet_ms) d->max_quiet_ms = held;
             } else d->quiet_tracking = 0;
 
             float dot = a[0] * d->reference[0] + a[1] * d->reference[1] +
@@ -171,6 +183,8 @@ static void FallDetector_Update(FallDetector *d, const float a[3],
             if (changed_posture) {
                 if (!d->posture_tracking) d->posture_since = now;
                 d->posture_tracking = 1;
+                uint32_t held = (uint32_t)(now - d->posture_since);
+                if (held > d->max_posture_ms) d->max_posture_ms = held;
             } else d->posture_tracking = 0;
 
             int still_confirmed = d->low_g_seen && d->quiet_tracking &&

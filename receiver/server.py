@@ -4,6 +4,9 @@ Set ELDERCARE_TOKEN to a random 16-64-character printable token before starting.
 HTTP is unencrypted: bind to a trusted private demo network, not the public Internet.
 """
 import argparse
+import csv
+import io
+from urllib.parse import urlparse, parse_qs
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -14,7 +17,7 @@ import sqlite3
 import threading
 import time
 
-TYPES = {'fall', 'sos', 'local_ack', 'heartbeat'}
+TYPES = {'fall', 'sos', 'local_ack', 'heartbeat', 'rejected'}
 STATES = {'STARTUP', 'NORMAL', 'WAIT_IMPACT', 'CONFIRM', 'FALL'}
 
 
@@ -37,6 +40,8 @@ def validate_event(event):
     for key in ['accel_mg', 'gyro_dps', 'min_mg', 'peak_mg', 'peak_dps']:
         if type(event.get(key)) is not int or not -10000000 <= event[key] <= 10000000:
             raise ValueError('Invalid ' + key)
+    if type(event.get('rejection_flags', 0)) is not int or not 0 <= event.get('rejection_flags', 0) <= 63:
+        raise ValueError('Invalid rejection flags')
     return event
 
 
@@ -56,6 +61,13 @@ class Store:
             CREATE TABLE IF NOT EXISTS acknowledgements (
                 device TEXT, boot TEXT, incident INTEGER, acknowledged REAL,
                 PRIMARY KEY(device, boot, incident));
+            CREATE TABLE IF NOT EXISTS captures (
+                device TEXT, boot TEXT, capture_id INTEGER, received REAL, meta TEXT,
+                label TEXT DEFAULT 'unlabelled', note TEXT DEFAULT '',
+                PRIMARY KEY(device, boot, capture_id));
+            CREATE TABLE IF NOT EXISTS capture_parts (
+                device TEXT, boot TEXT, capture_id INTEGER, part INTEGER, samples TEXT,
+                PRIMARY KEY(device, boot, capture_id, part));
         ''')
 
     def accept(self, event):
@@ -93,6 +105,63 @@ class Store:
             self.db.execute('INSERT OR IGNORE INTO acknowledgements VALUES (?,?,?,?)',
                             (device, boot, incident, time.time()))
 
+    def accept_capture(self, data):
+        if not isinstance(data, dict): raise ValueError('Expected an object')
+        for key, pattern in [('device', r'[A-Za-z0-9_-]{1,32}'), ('boot', r'[0-9a-f]{16}'),
+                             ('outcome', r'[a-z_]{1,23}')]:
+            if not isinstance(data.get(key), str) or not re.fullmatch(pattern, data[key]):
+                raise ValueError('Invalid ' + key)
+        for key, low, high in [('capture_id', 1, 0xFFFFFFFF), ('part', 0, 99),
+                               ('total', 1, 300), ('pre_count', 0, 100), ('trigger_ms', 0, 0xFFFFFFFF)]:
+            if type(data.get(key)) is not int or not low <= data[key] <= high:
+                raise ValueError('Invalid ' + key)
+        if data.get('source') not in {'candidate', 'raw_motion', 'manual'}:
+            raise ValueError('Invalid capture source')
+        offset = data['part'] * 3
+        rows = data.get('samples')
+        if offset >= data['total'] or data['pre_count'] >= data['total'] or not isinstance(rows, list) or len(rows) != min(3, data['total']-offset):
+            raise ValueError('Invalid capture part length')
+        for row in rows:
+            if not isinstance(row, list) or len(row) != 15 or any(type(v) is not int for v in row):
+                raise ValueError('Invalid sample')
+            if not 0 <= row[0] <= 0xFFFFFFFF or not 0 <= row[13] <= 4 or not 0 <= row[14] <= 127 or any(not -2147483648 <= v <= 2147483647 for v in row[1:13]):
+                raise ValueError('Sample outside range')
+        meta = {k: data[k] for k in ['device','boot','capture_id','total','pre_count','trigger_ms','source','outcome']}
+        key = (data['device'], data['boot'], data['capture_id'])
+        encoded, samples = json.dumps(meta, sort_keys=True), json.dumps(rows)
+        with self.lock, self.db:
+            old = self.db.execute('SELECT meta FROM captures WHERE device=? AND boot=? AND capture_id=?', key).fetchone()
+            if old and old[0] != encoded: raise ValueError('Capture metadata changed')
+            old_part = self.db.execute('SELECT samples FROM capture_parts WHERE device=? AND boot=? AND capture_id=? AND part=?', (*key, data['part'])).fetchone()
+            if old_part and old_part[0] != samples: raise ValueError('Conflicting capture part')
+            self.db.execute('INSERT OR IGNORE INTO captures(device,boot,capture_id,received,meta) VALUES(?,?,?,?,?)', (*key,time.time(),encoded))
+            self.db.execute('INSERT OR IGNORE INTO capture_parts VALUES(?,?,?,?,?)', (*key,data['part'],samples))
+        return f"ACK {data['boot']}-c{data['capture_id']}-{data['part']}\n"
+
+    def capture(self, device, boot, capture_id):
+        with self.lock:
+            record = self.db.execute('SELECT received,meta,label,note FROM captures WHERE device=? AND boot=? AND capture_id=?', (device,boot,capture_id)).fetchone()
+            if not record: raise ValueError('Capture not found')
+            result = json.loads(record[1])
+            result.update(received=record[0], label=record[2], note=record[3])
+            rows = []
+            for part, encoded in self.db.execute('SELECT part,samples FROM capture_parts WHERE device=? AND boot=? AND capture_id=? ORDER BY part', (device,boot,capture_id)):
+                rows.extend(json.loads(encoded))
+            result.update(samples=rows, complete=len(rows)==result['total'])
+            return result
+
+    def annotate(self, data):
+        if not isinstance(data, dict) or data.get('label') not in {'unlabelled','fall_trial','normal_activity','false_alarm','missed_fall'}:
+            raise ValueError('Invalid trial label')
+        if not isinstance(data.get('note'),str) or len(data['note']) > 1000:
+            raise ValueError('Note must be at most 1000 characters')
+        if not isinstance(data.get('device'),str) or not isinstance(data.get('boot'),str) or type(data.get('capture_id')) is not int:
+            raise ValueError('Invalid capture key')
+        with self.lock, self.db:
+            result = self.db.execute('UPDATE captures SET label=?,note=? WHERE device=? AND boot=? AND capture_id=?',
+                                    (data['label'],data['note'],data['device'],data['boot'],data['capture_id']))
+            if not result.rowcount: raise ValueError('Capture not found')
+
     def state(self):
         now = time.time()
         with self.lock:
@@ -113,7 +182,15 @@ class Store:
                 history.append(item)
                 if len(history) >= 100:
                     break
-        return {'devices': devices, 'events': history, 'server_time': now}
+            captures = []
+            for device, boot, ident, received, meta, label, note in self.db.execute('SELECT * FROM captures ORDER BY received DESC LIMIT 60'):
+                item = json.loads(meta)
+                parts = self.db.execute('SELECT samples FROM capture_parts WHERE device=? AND boot=? AND capture_id=?', (device,boot,ident))
+                received_rows = sum(len(json.loads(row[0])) for row in parts)
+                item.update(received=received, label=label, note=note, received_rows=received_rows,
+                            complete=received_rows==item['total'])
+                captures.append(item)
+        return {'devices': devices, 'events': history, 'captures': captures, 'server_time': now}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -142,25 +219,50 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if self.path == '/':
-            self.reply(200, Path(__file__).with_name('index.html').read_bytes(), 'text/html; charset=utf-8')
-        elif self.path == '/api/state' and self.authenticated():
-            self.reply(200, json.dumps(self.server.store.state()))
-        elif self.path != '/api/state':
-            self.reply(404, '{"error":"Not found"}')
+        route = urlparse(self.path)
+        static = {'/': ('index.html','text/html; charset=utf-8'),
+                  '/app.js': ('app.js','text/javascript; charset=utf-8'),
+                  '/style.css': ('style.css','text/css; charset=utf-8')}
+        if route.path in static:
+            name, kind = static[route.path]
+            self.reply(200, Path(__file__).with_name(name).read_bytes(), kind)
+            return
+        if not self.authenticated(): return
+        try:
+            if route.path == '/api/state':
+                self.reply(200, json.dumps(self.server.store.state()))
+            elif route.path == '/api/capture':
+                query = parse_qs(route.query)
+                capture = self.server.store.capture(query['device'][0],query['boot'][0],int(query['id'][0]))
+                if query.get('format') == ['csv']:
+                    if not capture['complete']: raise ValueError('Capture upload incomplete')
+                    output = io.StringIO(newline='')
+                    writer = csv.writer(output)
+                    writer.writerow(['uptime_ms','raw_ax_mg','raw_ay_mg','raw_az_mg','filtered_ax_mg','filtered_ay_mg','filtered_az_mg','raw_gx_mdps','raw_gy_mdps','raw_gz_mdps','filtered_gx_mdps','filtered_gy_mdps','filtered_gz_mdps','state','flags'])
+                    writer.writerows(capture['samples'])
+                    self.reply(200, output.getvalue(), 'text/csv; charset=utf-8')
+                else: self.reply(200, json.dumps(capture))
+            else: self.reply(404, '{"error":"Not found"}')
+        except (ValueError,KeyError,TypeError) as error:
+            self.reply(400, json.dumps({'error':str(error)}))
 
     def do_POST(self):
         if not self.authenticated():
             return
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 2048:
+            if not 0 < length <= (8192 if self.path == '/api/notes' else 2048):
                 raise ValueError('Invalid request length')
             if self.headers.get('Transfer-Encoding'):
                 raise ValueError('Chunked requests are not supported')
             event = json.loads(self.rfile.read(length))
             if self.path == '/api/events':
                 self.reply(200, self.server.store.accept(event), 'text/plain')
+            elif self.path == '/api/captures':
+                self.reply(200, self.server.store.accept_capture(event), 'text/plain')
+            elif self.path == '/api/notes':
+                self.server.store.annotate(event)
+                self.reply(200, '{"ok":true}')
             elif self.path == '/api/ack':
                 self.server.store.acknowledge(event['device'], event['boot'], event['incident'])
                 self.reply(200, '{"ok":true}')

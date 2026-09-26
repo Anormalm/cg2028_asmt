@@ -50,11 +50,13 @@ int test_entry(int scenario)
             sample(1.8f, 150.0f, 0, 0);
             run(130, 1.0f, 0.0f, 0, 0);
             CHECK(d.state == FD_STARTUP);
+            CHECK(d.rejection_flags == 16U && d.max_quiet_ms >= FD_QUIET_MS);
             break;
         case 4: /* Even changed posture must have gyro evidence. */
             sample(1.8f, 0.0f, 0, 0);
             run(130, 1.0f, 0.0f, 1, 0);
             CHECK(d.state == FD_STARTUP);
+            CHECK(d.rejection_flags == 2U && d.reason[3] == 'r');
             break;
         case 5: /* Rotation preceding impact is retained briefly. */
             sample(1.0f, 150.0f, 0, 0);
@@ -74,6 +76,7 @@ int test_entry(int scenario)
             sample(0.4f, 150.0f, 0, 0);
             run(36, 1.0f, 0.0f, 0, 0);
             CHECK(d.state == FD_STARTUP);
+            CHECK(d.rejection_flags == 1U);
             break;
         case 8: /* Posture timer resets when original posture returns. */
             sample(1.8f, 150.0f, 0, 0);
@@ -90,6 +93,7 @@ int test_entry(int scenario)
             t += 1000U;
             sample(1.0f, 0.0f, 1, 0);
             CHECK(d.state == FD_STARTUP);
+            CHECK(d.rejection_flags == 32U);
             break;
         case 11: /* Held button, short tap, sampling gap, then valid hold. */
             sample(1.8f, 150.0f, 0, 1);

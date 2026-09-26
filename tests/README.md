@@ -66,3 +66,27 @@ Rejected candidates enter a one-second settling period before rearming. The
 accelerometer remains at the BSP's +/-2 g per-axis range, which can clip impacts.
 Falls without either qualifying sequence can still be missed, especially if
 post-event acceleration/rotation stays high. Tune on repeated physical trials.
+
+## Recording a missed fall or false alarm
+
+1. Let the protected board settle in NORMAL for at least two seconds.
+2. Open Motion trials on the receiver. For a deliberate trial, set
+   `debug_capture_request` to `1` in CubeIDE and perform the motion within the next
+   four seconds. Avoid pausing at breakpoints during a motion; that creates a
+   sample gap and invalidates timing.
+3. Wait for `capture_completed` to increase and then for upload to complete.
+   Review acceleration and angular-speed plots and the terminal decision.
+4. Label the trial according to the motion you actually performed. Record the
+   fixture, orientation, surface, expected result and observed result in Notes.
+5. Export CSV. Compare repeated controlled falls against sitting, bending,
+   tilting, carrying and light shaking. Change one parameter at a time only after
+   you have evidence; repeat both fall and normal-activity trials after changes.
+6. Test B2 double-tap sound test, 3-second SOS, escalation after 15 seconds and
+   release-then-hold acknowledgement. Repeat while a recording uploads and while
+   Wi-Fi is disconnected. Monitor `dtMax` and filter mismatch count.
+
+The ARM test harness now also checks recorder chronology, chunk boundaries,
+full-buffer handling, buzzer rhythms and rejection flags. Receiver tests cover
+out-of-order/retried recording chunks, conflicts, authenticated CSV, incomplete
+uploads and persistent trial notes. These are synthetic software tests; they do
+not establish physical detection accuracy or prove buzzer timing on hardware.

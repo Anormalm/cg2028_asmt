@@ -28,5 +28,24 @@ int alert_ui_test(void)
     CHECK(AlertProtocol_IsAck("HTTP/1.1 200 OK\r\n\r\nACK boot-1\n", "ACK boot-1\n"));
     CHECK(!AlertProtocol_IsAck("HTTP/1.1 401 Unauthorized\r\n\r\nACK boot-1\n", "ACK boot-1\n"));
     CHECK(!AlertProtocol_IsAck("HTTP/1.1 200 OK\r\n\r\nACK boot-10\n", "ACK boot-1\n"));
+    u = (AlertUI){0};
+    AlertUI_Update(&u, 0, 0, 1, 0);
+    AlertUI_Update(&u, 100, 1, 1, 0);
+    AlertUI_Update(&u, 180, 0, 1, 0);
+    CHECK(!u.tuning);
+    AlertUI_Update(&u, 300, 1, 1, 0);
+    AlertUI_Update(&u, 380, 0, 1, 0);
+    CHECK(u.tuning && AlertUI_BuzzerOn(&u, 400));
+    CHECK(!AlertUI_BuzzerOn(&u, 500));
+    CHECK(AlertUI_BuzzerOn(&u, 800));
+    AlertUI_Update(&u, 1200, 0, 1, 0);
+    CHECK(!u.tuning && !AlertUI_BuzzerOn(&u, 1200));
+    AlertUI_Update(&u, 1300, 0, 0, 1);
+    u.sos_pattern = 1;
+    CHECK(AlertUI_BuzzerOn(&u, 1300));
+    CHECK(!AlertUI_BuzzerOn(&u, 1450));
+    CHECK(AlertUI_BuzzerOn(&u, 2300)); /* First dash lasts 300 ms. */
+    CHECK(!AlertUI_BuzzerOn(&u, 2450));
+    CHECK(AlertUI_BuzzerOn(&u, 16750)); /* Escalation overrides Morse. */
     return 0;
 }

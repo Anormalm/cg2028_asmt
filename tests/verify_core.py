@@ -79,11 +79,17 @@ def main():
                         '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror',
                         '-ffreestanding', '-nostdlib', '-fno-builtin',
                         '-I' + str(ROOT / 'Core/Inc'),
+                        '-I' + str(ROOT / 'tests/stubs'),
+                        str(ROOT / 'tests/capture_cases.c'),
+                        str(ROOT / 'Core/Src/motion_capture.c'),
                         str(ROOT / 'tests/detector_cases.c'),
                         str(ROOT / 'tests/alert_ui_cases.c'),
                         str(ROOT / 'Core/Src/mov_avg.s'),
                         '-T' + str(linker), '-lc', '-lgcc', '-o', str(elf)], check=True)
         uc, symbols = load(elf)
+        result = call(uc, symbols['capture_test'], [])
+        assert result == 0, f'Capture test failed at line {result}'
+        print('PASS: motion capture history, chunks, two-slot buffering and overflow')
         edges = [-2**31, -2**31+1, -1000000, -101, -100, -99, -1,
                  0, 1, 99, 100, 101, 1000000, 2**31-2, 2**31-1]
         rng = random.Random(2028)

@@ -2,7 +2,7 @@
 #define ALERT_NETWORK_H
 #include <stdint.h>
 typedef struct {
-    uint32_t sequence, incident, uptime_ms, dropped;
+    uint32_t sequence, incident, uptime_ms, dropped, rejection_flags;
     int accel_mg, gyro_dps, min_mg, peak_mg, peak_dps;
     char type[16], state[16], reason[24];
 } AlertEvent;

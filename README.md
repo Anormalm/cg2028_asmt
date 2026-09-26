@@ -86,7 +86,9 @@ Open UART at **115200, 8-N-1, no flow control**. After startup settling, expect
 | Normal operation | Silent buzzer, slow LED, heartbeat about every 10 s |
 | Hold blue B2 for 3 s in NORMAL | Manual SOS, fast LED, audible alarm, queued SOS event |
 | Confirmed simulated fall | Fast LED, audible alarm, queued fall event |
-| First 15 s of an alarm | Two 100 ms beeps every 2 s |
+| Double-tap B2 in NORMAL | Short short long short sound-test rhythm |
+| First 15 s of a fall alarm | Two 100 ms beeps every 2 s |
+| First 15 s of manual SOS | Morse SOS: three short, three long, three short |
 | Alarm unresolved after 15 s | Three 100 ms beeps every 1 s |
 | Release B2, then hold 1 s during an alarm | Local acknowledgement, confirmation chirp, settling then NORMAL |
 | Short B2 tap during alarm | Alarm remains latched |
@@ -152,3 +154,76 @@ and late events. These checks do **not** replace on-board testing of the SPI
 module, Wi-Fi association, D6 output, task scheduling or calibrated fall accuracy.
 
 FreeRTOS licensing/provenance is recorded in `THIRD_PARTY.md`.
+
+## Motion recordings and the updated dashboard
+
+After updating this branch, restart `receiver/server.py` using your existing
+token and database, then hard-refresh the website (Ctrl+F5). Existing events are
+preserved; the receiver adds recording tables automatically. Refresh the
+**CG2028_Enhancements** project in CubeIDE, rebuild, launch Debug and Resume.
+The original assignment project is a separate folder.
+
+The dashboard has Monitor, Motion trials and Event log views. It supports device
+and event filters, incident details, caregiver acknowledgement, optional browser
+alert sounds, and CSV exports. Browser sounds require an explicit click and are
+separate from the board buzzer. Recording plots compare raw and assembly-filtered
+acceleration/angular-speed magnitudes; the downloadable CSV preserves all axes.
+Trial labels and notes persist in SQLite. Labels record your observations and
+do not automatically alter the detector.
+
+Recordings target 50 Hz: up to 100 pre-trigger samples and 200 samples starting
+at the trigger (approximately two seconds before and four seconds after).
+Triggers include a detector candidate or raw acceleration below 500 mg / above
+1800 mg, or raw angular speed above 150 degrees/s, while NORMAL. Raw triggers
+help capture motion that filtering prevented from becoming a candidate. The
+automatic trigger rearms after 50 consecutive quiet samples. Thresholds for
+fall detection have not been calibrated by these changes.
+
+In CubeIDE **Live Expressions**, use these variable names:
+
+| Expression | Meaning |
+| --- | --- |
+| `debug_capture_request` | Set to `1` to start a manual recording; firmware resets it to `0` |
+| `capture_completed` | Completed recordings since boot |
+| `capture_uploaded` | Recordings fully acknowledged by the receiver |
+| `capture_dropped` | Trigger requests rejected because both RAM slots were full |
+| `network_step` | Current network operation |
+| `network_failed_step` | Most recent failed operation |
+| `network_last_status` | Last driver's failure status; `-1` also indicates an invalid/missing HTTP ACK |
+| `network_http_status` | HTTP response status, when one was received |
+
+Only **two recordings** fit in the recorder's allocated RAM slots. A trigger
+during an existing recording is ignored; inspect the counters and wait for an
+upload before another trial. Board reset discards RAM recordings. Each full
+recording uses 100 three-sample HTTP requests, so uploading can take considerably
+longer than recording. Alarms and due heartbeats have priority between requests;
+a request already in progress completes or times out first. Partial recordings
+show upload progress and are not offered as complete plots/CSV files.
+
+Rejected candidates now report `no_impact`, `no_rotation`, `no_reference`,
+`no_posture`, `confirmation_short`, or `sample_gap`. UART `reject` is a bitmask:
+1=no impact, 2=no rotation, 4=no reference, 8=quiet hold too short,
+16=posture hold too short, 32=sampling gap. The confirmation paths are alternatives,
+so not every check is required on every path. Capture flags separately encode
+low-g(1), rotation(2), reference(4), quiet(8), posture(16), possible axis clipping(32)
+and sampling gap(64). Gyroscope CSV axes are in **millidegrees/s**, while plotted
+magnitudes use **degrees/s**. Acceleration axes use **mg**. All timestamps in CSV
+are unsigned board uptime milliseconds.
+
+The sensor's current ±2g range can clip hard impacts. The dashboard flags axes
+approaching ±1950 mg; it cannot reconstruct a clipped peak. A recording marked
+`no_candidate` means no terminal detector decision was captured in that window,
+not proof that the motion was safe.
+
+## Buzzer sound design
+
+The D6/PB1 output uses non-blocking on/off rhythms, updated by the sensor task.
+Two short B2 taps (each 40–350 ms, releases within 500 ms) play the sound test.
+Manual SOS uses Morse SOS, falls use paired warning pulses, both escalate after
+15 seconds, and local acknowledgement gives one short chirp. Alarm onset cancels
+the test rhythm. Holding B2 keeps its existing SOS/acknowledgement behaviour.
+
+This implementation uses rhythmic effects at the buzzer's own pitch, rather than
+a pitched song. Seeed also documents PWM tone control for the
+[Grove Buzzer](https://wiki.seeedstudio.com/Grove-Buzzer/); that would need a separate
+timer/PWM implementation. Verify the actual sound and loudness on your module.

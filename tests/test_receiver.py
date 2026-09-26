@@ -102,6 +102,43 @@ class ReceiverTests(unittest.TestCase):
 
     def test_dashboard_served(self):
         self.assertIn(b'ElderCare alerts', self.request('/'))
+        self.assertIn(b'selectCapture', self.request('/app.js'))
+        self.assertIn(b'.topbar', self.request('/style.css'))
+
+    def test_capture_retry_order_export_and_notes(self):
+        data = dict(device='test-board',boot=event()['boot'],capture_id=1,part=1,
+                    total=5,pre_count=2,trigger_ms=40,source='raw_motion',outcome='no_rotation',
+                    samples=[[i*20]+[0]*12+[1,0] for i in range(3,5)])
+        route = '/api/capture?device=test-board&boot='+event()['boot']+'&id=1'
+        self.assertEqual(self.request('/api/captures',data), b'ACK 0123456789abcdef-c1-1\n')
+        self.request('/api/captures',data)
+        self.assertFalse(json.loads(self.request(route))['complete'])
+        with self.assertRaises(urllib.error.HTTPError): self.request(route+'&format=csv')
+        changed=copy.deepcopy(data)
+        changed['samples'][0][1]=8
+        with self.assertRaises(urllib.error.HTTPError): self.request('/api/captures',changed)
+        data['part']=0
+        data['samples']=[[i*20]+[0]*12+[1,0] for i in range(3)]
+        self.request('/api/captures',data)
+        capture=json.loads(self.request(route))
+        self.assertTrue(capture['complete'])
+        self.assertEqual([r[0] for r in capture['samples']],[0,20,40,60,80])
+        self.assertEqual(len(self.request(route+'&format=csv').decode().splitlines()),6)
+        notes=dict(device=data['device'],boot=data['boot'],capture_id=1,label='missed_fall',note='Protected dummy; no rotation.')
+        self.request('/api/notes',notes)
+        self.assertEqual(json.loads(self.request(route))['label'],'missed_fall')
+        reopened=receiver.Store(self.path)
+        self.assertEqual(reopened.state()['captures'][0]['note'],notes['note'])
+        reopened.db.close()
+        with self.assertRaises(urllib.error.HTTPError): self.request(route,token='wrong')
+        data['samples'][0][13]=5
+        with self.assertRaises(urllib.error.HTTPError): self.request('/api/captures',data)
+
+    def test_rejected_candidate(self):
+        sample=event(5,'rejected','STARTUP')
+        sample.update(reason='no_rotation',rejection_flags=10)
+        self.request('/api/events',sample)
+        self.assertEqual(json.loads(self.request('/api/state'))['events'][0]['rejection_flags'],10)
 
 
 if __name__ == '__main__':

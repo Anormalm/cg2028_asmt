@@ -10,6 +10,7 @@
 #include "fall_detector.h"
 #include "alert_ui.h"
 #include "alert_network.h"
+#include "motion_capture.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
@@ -124,6 +125,8 @@ static void SensorTask(void *argument)
     (void)argument;
     app_scheduler_running = 1;
     uint32_t incident = 0;
+    int capture_armed = 1;
+    uint32_t capture_quiet = 0;
     TickType_t wake = xTaskGetTickCount();
     /* Previous EWMA outputs. The first test/application sample starts from 0. */
     int accel_ewma_asm[3] = {0, 0, 0};
@@ -247,7 +250,41 @@ static void SensorTask(void *argument)
             detector.min_accel = detector.peak_accel = accel_magnitude;
             detector.peak_gyro = gyro_magnitude;
             AlertUI_Update(&alert_ui, now, pressed, 0, 1);
+            alert_ui.sos_pattern = 1;
         }
+        MotionSample motion = {0};
+        motion.time_ms = now;
+        motion.state = detector.state;
+        motion.flags = (detector.low_g_seen ? 1U : 0U) |
+            (detector.rotation_seen ? 2U : 0U) | (detector.reference_valid ? 4U : 0U) |
+            (detector.quiet_tracking ? 8U : 0U) | (detector.posture_tracking ? 16U : 0U) |
+            (sample_dt > FD_MAX_SAMPLE_GAP_MS ? 64U : 0U);
+        int64_t raw_accel_sq = 0, raw_gyro_sq = 0;
+        for (int i = 0; i < 3; ++i) {
+            motion.ar[i] = accel_raw_i16[i]; motion.af[i] = accel_ewma_asm[i];
+            motion.gr[i] = gyro_raw_int[i]; motion.gf[i] = gyro_ewma_asm[i];
+            raw_accel_sq += (int64_t)motion.ar[i] * motion.ar[i];
+            raw_gyro_sq += (int64_t)motion.gr[i] * motion.gr[i];
+            if (motion.ar[i] >= 1950 || motion.ar[i] <= -1950) motion.flags |= 32U;
+        }
+        int candidate_started = previous_state == FD_NORMAL &&
+            (detector.state == FD_WAIT_IMPACT || detector.state == FD_CONFIRM);
+        const char *capture_trigger = NULL;
+        if (debug_capture_request) { capture_trigger = "manual"; debug_capture_request = 0; }
+        else if (capture_armed && candidate_started) capture_trigger = "candidate";
+        else if (capture_armed && detector.state == FD_NORMAL &&
+            (raw_accel_sq < 250000LL || raw_accel_sq > 3240000LL || raw_gyro_sq > 22500000000LL))
+            capture_trigger = "raw_motion";
+        if (capture_trigger) { capture_armed = 0; capture_quiet = 0; }
+        if (accel_magnitude > 0.85f * FD_GRAVITY && accel_magnitude < 1.15f * FD_GRAVITY && gyro_magnitude < 20.0f) {
+            if (++capture_quiet >= 50) capture_armed = 1;
+        } else capture_quiet = 0;
+        const char *capture_outcome = NULL;
+        if (previous_state != detector.state && previous_state != FD_FALL_LATCHED &&
+            (detector.state == FD_FALL_LATCHED ||
+             ((previous_state == FD_CONFIRM || previous_state == FD_WAIT_IMPACT) && detector.state == FD_STARTUP)))
+            capture_outcome = detector.reason;
+        MotionCapture_Add(&motion, capture_trigger, capture_outcome);
         int fall_detected = (detector.state == FD_FALL_LATCHED);
         HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin,
                          AlertUI_BuzzerOn(&alert_ui, now) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -259,6 +296,7 @@ static void SensorTask(void *argument)
         message.min_mg = (int)(detector.min_accel * 1000.0f / FD_GRAVITY);
         message.peak_mg = (int)(detector.peak_accel * 1000.0f / FD_GRAVITY);
         message.peak_dps = (int)detector.peak_gyro;
+        message.rejection_flags = detector.rejection_flags;
         snprintf(message.state, sizeof(message.state), "%s", FallState_Name(detector.state));
         snprintf(message.reason, sizeof(message.reason), "%s", detector.reason);
         if (fall_detected && previous_state != FD_FALL_LATCHED) {
@@ -270,17 +308,22 @@ static void SensorTask(void *argument)
             AlertNetwork_Publish(&message);
             incident = 0;
         }
+        if ((previous_state == FD_CONFIRM || previous_state == FD_WAIT_IMPACT) && detector.state == FD_STARTUP) {
+            strcpy(message.type, "rejected");
+            message.incident = 0;
+            AlertNetwork_Publish(&message);
+        }
         message.incident = incident;
         AlertNetwork_SetSnapshot(&message);
 
         if (previous_state != detector.state) {
             char event[160];
             snprintf(event, sizeof(event),
-                     "EVENT t=%lu state=%s why=%s min_mg=%d peak_mg=%d peak_dps=%d\r\n",
+                     "EVENT t=%lu state=%s why=%s min_mg=%d peak_mg=%d peak_dps=%d reject=%lu\r\n",
                      (unsigned long)now, FallState_Name(detector.state), detector.reason,
                      (int)(detector.min_accel * 1000.0f / FD_GRAVITY),
                      (int)(detector.peak_accel * 1000.0f / FD_GRAVITY),
-                     (int)detector.peak_gyro);
+                     (int)detector.peak_gyro, (unsigned long)detector.rejection_flags);
             UART_Send(event);
             if (fall_detected || previous_state == FD_FALL_LATCHED) {
                 BSP_LED_On(LED2);
