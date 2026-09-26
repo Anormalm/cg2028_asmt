@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ElderCare alerts</title>
+<style>
+body{font:16px system-ui,sans-serif;background:#f4f6f8;color:#152b3b;margin:0;padding:28px;max-width:1100px;margin:auto}h1{margin-bottom:4px}p{color:#536575}input,button{font:inherit;padding:10px;border-radius:6px;border:1px solid #abb7c0}button{background:#155e75;color:white;cursor:pointer}#devices{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}.card{background:white;border-left:6px solid #15803d;padding:20px;border-radius:8px;min-width:230px;box-shadow:0 2px 8px #0001}.alarm{border-color:#b91c1c}.offline{border-color:#d97706}.big{font-size:24px;font-weight:700}table{width:100%;border-collapse:collapse;background:white}td,th{padding:12px;text-align:left;border-bottom:1px solid #dde3e8;font-size:14px}.scroll{overflow-x:auto}#status{min-height:24px}small{color:#536575}.badge{font-weight:700}input{max-width:60vw}
+</style>
+<h1>ElderCare alerts</h1><p>Device status, delivered events, and caregiver acknowledgement.</p>
+<form id="login"><input id="token" type="password" placeholder="Receiver access token" autocomplete="off" aria-label="Receiver access token"> <button>Connect</button></form>
+<p id="status" role="status">Enter the same token configured on the receiver.</p>
+<div id="devices"></div><h2>Event history</h2>
+<p><small>“Seen by caregiver” records acknowledgement here. It does not silence the board or confirm recovery.</small></p>
+<div class="scroll"><table><thead><tr><th>Received</th><th>Device / event</th><th>Reason</th><th>Peak</th><th>Caregiver</th></tr></thead><tbody id="history"></tbody></table></div>
+<script>
+let token=sessionStorage.getItem('eldercare-token')||'', busy=false;
+const status=document.getElementById('status');
+document.getElementById('token').value=token;
+document.getElementById('login').onsubmit=e=>{e.preventDefault();token=document.getElementById('token').value;sessionStorage.setItem('eldercare-token',token);refresh()};
+function el(tag,text,cls){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n}
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});if(!r.ok)throw Error(r.status===401?'Token not accepted.':'Receiver returned '+r.status);return r.json()}
+async function refresh(){if(!token||busy)return;busy=true;try{const data=await api('/api/state');
+const devices=document.getElementById('devices');devices.replaceChildren();
+for(const d of data.devices){const card=el('div','', 'card'+(!d.online?' offline':d.state==='FALL'?' alarm':''));card.append(el('h3',d.device),el('div',d.online?d.state:'OFFLINE','big'),el('p','Last received '+new Date(d.last_seen*1000).toLocaleTimeString()),el('small','Board uptime '+Math.floor(d.uptime_ms/1000)+'s · dropped events '+d.dropped));devices.append(card)}
+const history=document.getElementById('history');history.replaceChildren();
+for(const e of data.events){const row=el('tr','');row.append(el('td',new Date(e.received*1000).toLocaleString()),el('td',e.device+' · '+e.type+' #'+e.seq),el('td',e.reason),el('td',e.peak_mg+' mg / '+e.peak_dps+' °/s'));const action=el('td','');if(e.type==='fall'||e.type==='sos'){if(e.caregiver_ack)action.textContent='Seen '+new Date(e.caregiver_ack*1000).toLocaleTimeString();else{const button=el('button','Mark seen');button.onclick=async()=>{button.disabled=true;try{await api('/api/ack',{device:e.device,boot:e.boot,incident:e.incident});await refresh()}catch(err){status.textContent=err.message;button.disabled=false}};action.append(button)}}else action.textContent='Local acknowledgement';row.append(action);history.append(row)}
+status.textContent=data.devices.length?'Updated '+new Date().toLocaleTimeString():'Connected. Waiting for the first device message.';
+}catch(error){status.textContent=error.message+' Displayed data may be stale.'}finally{busy=false}}
+setInterval(refresh,2000);refresh();
+</script></html>

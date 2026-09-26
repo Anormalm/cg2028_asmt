@@ -7,6 +7,11 @@
 
 /*--------------------------- Includes ---------------------------------------*/
 #include "main.h"
+#include "fall_detector.h"
+#include "alert_ui.h"
+#include "alert_network.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_accelero.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_gyro.h"
@@ -34,117 +39,44 @@ int ewma_filter_C(int new_data, int old_output, int alpha_percent);
 
 UART_HandleTypeDef huart1;
 
-/* Experimental starting thresholds, applied to ASSEMBLY-filtered magnitudes.
- * BSP units: acceleration mg, gyro mdps. At 50 Hz, alpha=50 retains short
- * events better than alpha=25. Validate thresholds with recorded board trials.
- * The BSP's +/-2 g accelerometer range can clip strong impacts.
- */
-#define LOW_ACCEL_MPS2       (0.65f * 9.80665f)
-#define IMPACT_ACCEL_MPS2    (1.60f * 9.80665f)
-#define ROTATION_DPS         100.0f
-#define QUIET_GYRO_DPS        20.0f
-#define QUIET_ACCEL_MIN      (0.85f * 9.80665f)
-#define QUIET_ACCEL_MAX      (1.15f * 9.80665f)
-#define FILTER_SETTLE_MS     1000U
-#define IMPACT_WINDOW_MS      700U
-#define CONFIRM_WINDOW_MS    2500U
-#define QUIET_REQUIRED_MS    1000U
-#define ACK_HOLD_MS          1000U
+static FallDetector detector;
+static AlertUI alert_ui;
+volatile int app_scheduler_running;
+static void SensorTask(void *argument);
 
-typedef enum {
-    FD_STARTUP, FD_NORMAL, FD_WAIT_IMPACT, FD_CONFIRM, FD_FALL_LATCHED
-} FallState;
-
-static FallState fall_state = FD_STARTUP;
-static uint32_t state_since, quiet_since, button_since;
-static int rotation_seen, quiet_tracking, button_tracking, ack_armed;
-
-static const char *FallState_Name(void)
+static void SystemClock_Config(void)
 {
-    switch (fall_state) {
-        case FD_STARTUP: return "STARTUP";
-        case FD_NORMAL: return "NORMAL";
-        case FD_WAIT_IMPACT: return "WAIT_IMPACT";
-        case FD_CONFIRM: return "CONFIRM";
-        case FD_FALL_LATCHED: return "FALL";
-        default: return "UNKNOWN";
-    }
-}
-
-static void FallDetector_Update(float accel, float gyro, uint32_t now)
-{
-    switch (fall_state) {
-        case FD_STARTUP:
-            /* Do not interpret zero-initialized filter startup as free fall. */
-            if ((uint32_t)(now - state_since) >= FILTER_SETTLE_MS)
-                fall_state = FD_NORMAL;
-            break;
-        case FD_NORMAL:
-            if (accel < LOW_ACCEL_MPS2) {
-                rotation_seen = (gyro >= ROTATION_DPS);
-                quiet_tracking = 0;
-                state_since = now;
-                fall_state = FD_WAIT_IMPACT;
-            }
-            break;
-        case FD_WAIT_IMPACT:
-            if (gyro >= ROTATION_DPS) rotation_seen = 1;
-            if ((uint32_t)(now - state_since) > IMPACT_WINDOW_MS) {
-                fall_state = FD_NORMAL;
-            } else if (accel >= IMPACT_ACCEL_MPS2) {
-                quiet_tracking = 0;
-                state_since = now;
-                fall_state = FD_CONFIRM;
-            }
-            break;
-        case FD_CONFIRM:
-            /* Allow a short gyro/filter lag around impact. */
-            if ((uint32_t)(now - state_since) <= 300U && gyro >= ROTATION_DPS)
-                rotation_seen = 1;
-            if ((uint32_t)(now - state_since) > CONFIRM_WINDOW_MS) {
-                quiet_tracking = 0;
-                fall_state = FD_NORMAL;
-                break;
-            }
-            if (accel >= QUIET_ACCEL_MIN && accel <= QUIET_ACCEL_MAX &&
-                gyro < QUIET_GYRO_DPS) {
-                if (!quiet_tracking) {
-                    quiet_since = now;
-                    quiet_tracking = 1;
-                }
-                if (rotation_seen &&
-                    (uint32_t)(now - quiet_since) >= QUIET_REQUIRED_MS) {
-                    fall_state = FD_FALL_LATCHED;
-                    state_since = now;
-                    button_tracking = 0;
-                    ack_armed = 0;
-                }
-            } else {
-                quiet_tracking = 0;
-            }
-            break;
-        case FD_FALL_LATCHED:
-            /* B2 is active LOW. Require release after detection, then a hold. */
-            if (BSP_PB_GetState(BUTTON_USER) != GPIO_PIN_RESET) {
-                ack_armed = 1;
-                button_tracking = 0;
-            } else if (ack_armed) {
-                if (!button_tracking) {
-                    button_since = now;
-                    button_tracking = 1;
-                } else if ((uint32_t)(now - button_since) >= ACK_HOLD_MS) {
-                    fall_state = FD_STARTUP;
-                    state_since = now;
-                    rotation_seen = quiet_tracking = button_tracking = ack_armed = 0;
-                }
-            }
-            break;
-    }
+    /* MSI 4 MHz -> PLL -> 80 MHz. Leaves CPU headroom for RTOS and telemetry. */
+    __HAL_RCC_PWR_CLK_ENABLE();
+    if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+        App_Fatal();
+    RCC_OscInitTypeDef oscillator = {0};
+    oscillator.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+    oscillator.MSIState = RCC_MSI_ON;
+    oscillator.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
+    oscillator.MSIClockRange = RCC_MSIRANGE_6;
+    oscillator.PLL.PLLState = RCC_PLL_ON;
+    oscillator.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+    oscillator.PLL.PLLM = 1;
+    oscillator.PLL.PLLN = 40;
+    oscillator.PLL.PLLP = RCC_PLLP_DIV7;
+    oscillator.PLL.PLLQ = RCC_PLLQ_DIV2;
+    oscillator.PLL.PLLR = RCC_PLLR_DIV2;
+    if (HAL_RCC_OscConfig(&oscillator) != HAL_OK) App_Fatal();
+    RCC_ClkInitTypeDef clock = {0};
+    clock.ClockType = RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK |
+                      RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    clock.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    clock.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    clock.APB1CLKDivider = RCC_HCLK_DIV1;
+    clock.APB2CLKDivider = RCC_HCLK_DIV1;
+    if (HAL_RCC_ClockConfig(&clock, FLASH_LATENCY_4) != HAL_OK) App_Fatal();
 }
 
 int main(void)
 {
     HAL_Init();
+    SystemClock_Config();
     UART1_Init();
     BSP_LED_Init(LED2);
     BSP_LED_Off(LED2);
@@ -154,8 +86,45 @@ int main(void)
         BSP_LED_On(LED2);
         while (1) { HAL_Delay(100); }
     }
-    UART_Send("ElderCare: 50Hz target; Ar/Af=mg, Gr/Gf=mdps; hold B2 1s to acknowledge FALL\r\n");
+    UART_Send("ElderCare: 50Hz; Ar/Af=mg Gr/Gf=mdps; B2: hold 3s for SOS, release+hold 1s to ACK; buzzer D6\r\n");
 
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin, GPIO_PIN_RESET);
+    GPIO_InitTypeDef buzzer = {0};
+    buzzer.Pin = ARD_D6_Pin;
+    buzzer.Mode = GPIO_MODE_OUTPUT_PP;
+    buzzer.Pull = GPIO_NOPULL;
+    buzzer.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(ARD_D6_GPIO_Port, &buzzer);
+    if (!AlertNetwork_Init() ||
+        xTaskCreate(SensorTask, "sensors", 1536, NULL, 3, NULL) != pdPASS ||
+        xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS)
+        App_Fatal();
+    vTaskStartScheduler();
+    App_Fatal();
+    return 0;
+}
+
+void App_Fatal(void)
+{
+    __disable_irq();
+    BSP_LED_On(LED2);
+    HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin, GPIO_PIN_RESET);
+    for (;;) { }
+}
+
+void vApplicationMallocFailedHook(void) { App_Fatal(); }
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
+{
+    (void)task; (void)name; App_Fatal();
+}
+
+static void SensorTask(void *argument)
+{
+    (void)argument;
+    app_scheduler_running = 1;
+    uint32_t incident = 0;
+    TickType_t wake = xTaskGetTickCount();
     /* Previous EWMA outputs. The first test/application sample starts from 0. */
     int accel_ewma_asm[3] = {0, 0, 0};
     int gyro_ewma_asm[3]  = {0, 0, 0};
@@ -171,15 +140,16 @@ int main(void)
     uint32_t last_sample = HAL_GetTick();
     uint32_t mismatch_samples = 0;
     uint32_t max_sample_dt = 0;
-    state_since = HAL_GetTick();
+    FallDetector_Init(&detector, HAL_GetTick());
 
     while (1)
     {
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
         uint32_t sample_tick = HAL_GetTick();
         uint32_t sample_dt = (uint32_t)(sample_tick - last_sample);
-        if (sample_dt < SAMPLE_INTERVAL_MS) {
-            HAL_Delay(1);
-            continue;
+        if (sample_dt > FD_MAX_SAMPLE_GAP_MS) {
+            alert_ui.holding = alert_ui.sos_armed = 0;
+            wake = xTaskGetTickCount(); /* Do not replay a backlog of stale samples. */
         }
         last_sample = sample_tick;
         if (sample_dt > max_sample_dt) max_sample_dt = sample_dt;
@@ -263,14 +233,54 @@ int main(void)
          *********************************************************************/
 
         uint32_t now = HAL_GetTick();
-        FallState previous_state = fall_state;
-        FallDetector_Update(accel_magnitude, gyro_magnitude, now);
-        int fall_detected = (fall_state == FD_FALL_LATCHED);
+        FallState previous_state = detector.state;
+        int pressed = BSP_PB_GetState(BUTTON_USER) == GPIO_PIN_RESET;
+        FallDetector_Update(&detector, accel_mps2, accel_magnitude, gyro_magnitude,
+                            pressed, now);
+        int manual_sos = AlertUI_Update(&alert_ui, now, pressed,
+            detector.state == FD_NORMAL, detector.state == FD_FALL_LATCHED);
+        if (manual_sos) {
+            detector.state = FD_FALL_LATCHED;
+            detector.state_since = now;
+            detector.button_tracking = detector.ack_armed = 0;
+            detector.reason = "manual_sos";
+            detector.min_accel = detector.peak_accel = accel_magnitude;
+            detector.peak_gyro = gyro_magnitude;
+            AlertUI_Update(&alert_ui, now, pressed, 0, 1);
+        }
+        int fall_detected = (detector.state == FD_FALL_LATCHED);
+        HAL_GPIO_WritePin(ARD_D6_GPIO_Port, ARD_D6_Pin,
+                         AlertUI_BuzzerOn(&alert_ui, now) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        AlertEvent message = {0};
+        message.uptime_ms = now;
+        message.incident = incident;
+        message.accel_mg = (int)(accel_magnitude * 1000.0f / FD_GRAVITY);
+        message.gyro_dps = (int)gyro_magnitude;
+        message.min_mg = (int)(detector.min_accel * 1000.0f / FD_GRAVITY);
+        message.peak_mg = (int)(detector.peak_accel * 1000.0f / FD_GRAVITY);
+        message.peak_dps = (int)detector.peak_gyro;
+        snprintf(message.state, sizeof(message.state), "%s", FallState_Name(detector.state));
+        snprintf(message.reason, sizeof(message.reason), "%s", detector.reason);
+        if (fall_detected && previous_state != FD_FALL_LATCHED) {
+            strcpy(message.type, manual_sos ? "sos" : "fall");
+            message.incident = 0;
+            incident = AlertNetwork_Publish(&message);
+        } else if (!fall_detected && previous_state == FD_FALL_LATCHED) {
+            strcpy(message.type, "local_ack");
+            AlertNetwork_Publish(&message);
+            incident = 0;
+        }
+        message.incident = incident;
+        AlertNetwork_SetSnapshot(&message);
 
-        if (previous_state != fall_state) {
-            char event[64];
-            snprintf(event, sizeof(event), "EVENT t=%lu state=%s\r\n",
-                     (unsigned long)now, FallState_Name());
+        if (previous_state != detector.state) {
+            char event[160];
+            snprintf(event, sizeof(event),
+                     "EVENT t=%lu state=%s why=%s min_mg=%d peak_mg=%d peak_dps=%d\r\n",
+                     (unsigned long)now, FallState_Name(detector.state), detector.reason,
+                     (int)(detector.min_accel * 1000.0f / FD_GRAVITY),
+                     (int)(detector.peak_accel * 1000.0f / FD_GRAVITY),
+                     (int)detector.peak_gyro);
             UART_Send(event);
             if (fall_detected || previous_state == FD_FALL_LATCHED) {
                 BSP_LED_On(LED2);
@@ -291,11 +301,13 @@ int main(void)
             last_uart_print = now;
             char buffer[320];
             snprintf(buffer, sizeof(buffer),
-                     "n=%lu S=%s dtMax=%lu err=%lu "
+                     "n=%lu S=%s dtMax=%lu err=%lu net=%d delivered=%lu dropped=%lu "
                      "Ar=%d,%d,%d Af=%d,%d,%d "
                      "Gr=%d,%d,%d Gf=%d,%d,%d A_mg=%d G_dps=%d\r\n",
-                     sample_number, FallState_Name(),
+                     sample_number, FallState_Name(detector.state),
                      (unsigned long)max_sample_dt, (unsigned long)mismatch_samples,
+                     (int)AlertNetwork_State(), (unsigned long)AlertNetwork_Delivered(),
+                     (unsigned long)AlertNetwork_Dropped(),
                      (int)accel_raw_i16[0], (int)accel_raw_i16[1], (int)accel_raw_i16[2],
                      accel_ewma_asm[0], accel_ewma_asm[1], accel_ewma_asm[2],
                      gyro_raw_int[0], gyro_raw_int[1], gyro_raw_int[2],
@@ -312,9 +324,9 @@ int ewma_filter_C(int new_data, int old_output, int alpha_percent)
 {
     /* Reference implementation for verification only. The assembly routine
      * must be used in the actual sensor-processing and detection pipeline. */
-    int numerator = alpha_percent * new_data
-                  + (100 - alpha_percent) * old_output;
-    return numerator / 100;
+    int64_t numerator = (int64_t)alpha_percent * new_data
+                      + (int64_t)(100 - alpha_percent) * old_output;
+    return (int)(numerator / 100);
 }
 
 static void UART_Send(const char *text)

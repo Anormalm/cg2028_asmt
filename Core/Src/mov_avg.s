@@ -33,30 +33,41 @@
 @ - Preserve all callee-saved registers that you use (R4-R11).
 @ - Do not call a C helper function and do not use floating-point instructions.
 @
-@ Register table:
-@   R0 = new_data / return filtered output
-@   R1 = old_output
-@   R2 = alpha_percent
-@   R3 = 100 - alpha_percent
-@   R4 = alpha_percent * new_data, then numerator
-@   R5 = (100 - alpha_percent) * old_output
-@   R6 = constant 100 for division
-@   R7 = unused
-@
-@ Write your program from here.
+@ Divide each input into a signed quotient and remainder first:
+@ x = 100*qx + rx, y = 100*qy + ry.
+@ The weighted quotient fits int32 for alpha in [0,100]; weighted remainders
+@ are bounded by +/-9900. This avoids overflow without floating point/helpers.
+@ R3=100, R4=weighted quotient, R5=scratch quotient, R6=100-alpha.
+@ R0=result, R1=final residual; R4-R6 are saved, all other callee-saved untouched.
+.thumb_func
 ewma_filter:
-    PUSH {r4-r7, lr}
-
-    @ Compute the signed weighted sum, then truncate toward zero.
+    PUSH {r4-r6, lr}
     MOV r3, #100
-    SUB r3, r3, r2 @ r3 = (100 - alpha_percent)
-    MUL r4, r0, r2 @ r4 = new_data * alpha_percent
-    MUL r5, r1, r3 @ r5 = old_output * (100 - alpha_percent)
-    ADD r4, r4, r5 @ r4 = numerator
+    SDIV r4, r0, r3
+    MLS r0, r4, r3, r0       @ new_data remainder
+    SDIV r5, r1, r3
+    MLS r1, r5, r3, r1       @ old_output remainder
+    RSB r6, r2, #100
+    MUL r4, r4, r2
+    MLA r4, r5, r6, r4       @ weighted quotient
+    MUL r0, r0, r2
+    MLA r0, r1, r6, r0       @ weighted remainder numerator
+    SDIV r5, r0, r3
+    MLS r1, r5, r3, r0       @ final residual in [-99,99]
+    ADD r0, r4, r5
 
-    MOV r6, #100
-    SDIV r0, r4, r6 @ r0 = result
-
-    POP  {r4-r7, pc}
-
+    @ Separate truncations need correction if integer and residual disagree.
+    CMP r0, #0
+    BEQ .Ldone
+    BLT .Lnegative
+    CMP r1, #0
+    IT LT
+    SUBLT r0, r0, #1
+    B .Ldone
+.Lnegative:
+    CMP r1, #0
+    IT GT
+    ADDGT r0, r0, #1
+.Ldone:
+    POP {r4-r6, pc}
 .size ewma_filter, .-ewma_filter

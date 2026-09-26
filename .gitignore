@@ -1,3 +1,11 @@
 .DS_Store
 Debug/
 Release/
+
+Core/Inc/alert_secrets.h
+build/
+__pycache__/
+*.pyc
+receiver/*.db*
+.env
+build-check.log

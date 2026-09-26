@@ -1,10 +1,10 @@
 /**
   ******************************************************************************
-  * @file    es_wifi_conf.h
+  * @file    es_wifi_io.h
   * @author  MCD Application Team
   * @version V4.0.0
   * @date    30-Nov-2018
-  * @brief   ES-WIFI configuration.
+  * @brief   This file contains the functions prototypes for es_wifi IO operations.
   ******************************************************************************
   * @attention
   *
@@ -35,48 +35,51 @@
   ******************************************************************************
   */
 
-#ifndef __ES_WIFI_CONF_H
-#define __ES_WIFI_CONF_H
+#ifndef __WIFI_IO__
+#define __WIFI_IO__
 
 #ifdef __cplusplus
  extern "C" {
 #endif
 
-#define LOCK_WIFI()
-#define UNLOCK_WIFI()
-#define LOCK_SPI()
-#define UNLOCK_SPI()
-#define SEM_SIGNAL(a)
-#define RTOS_FREE_SEM_MUTEX()
-#define RTOS_CREATE_SEM_MUTEX()
+/* Includes ------------------------------------------------------------------*/
+#include "stm32l4xx_hal.h"
 
-#define ES_WIFI_MAX_SSID_NAME_SIZE                  32
-#define ES_WIFI_MAX_PSWD_NAME_SIZE                  32
-#define ES_WIFI_PRODUCT_ID_SIZE                     32
-#define ES_WIFI_PRODUCT_NAME_SIZE                   32
-#define ES_WIFI_FW_REV_SIZE                         24
-#define ES_WIFI_API_REV_SIZE                        16
-#define ES_WIFI_STACK_REV_SIZE                      16
-#define ES_WIFI_RTOS_REV_SIZE                       16
+/* Exported constants --------------------------------------------------------*/
 
-#define ES_WIFI_DATA_SIZE                           1400
-#define ES_WIFI_MAX_DETECTED_AP                     10
-
-#define ES_WIFI_TIMEOUT                             30000
-
-#define ES_WIFI_USE_PING                            1
-#define ES_WIFI_USE_AWS                             0
-#define ES_WIFI_USE_FIRMWAREUPDATE                  0
-#define ES_WIFI_USE_WPS                             0
-
-#define ES_WIFI_USE_SPI                             1
-#define ES_WIFI_USE_UART                            (!ES_WIFI_USE_SPI)
+/* Exported macro ------------------------------------------------------------*/
+#define WIFI_RESET_MODULE()                do{\
+                                            HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, GPIO_PIN_RESET);\
+                                            SPI_WIFI_Delay(10);\
+                                            HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, GPIO_PIN_SET);\
+                                            SPI_WIFI_Delay(500);\
+                                             }while(0);
 
 
+#define WIFI_ENABLE_NSS()                  do{ \
+                                             HAL_GPIO_WritePin( GPIOE, GPIO_PIN_0, GPIO_PIN_RESET );\
+                                             }while(0);
+
+#define WIFI_DISABLE_NSS()                 do{ \
+                                             HAL_GPIO_WritePin( GPIOE, GPIO_PIN_0, GPIO_PIN_SET );\
+                                             }while(0);
+
+#define WIFI_IS_CMDDATA_READY()            (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1) == GPIO_PIN_SET)
+
+/* Exported functions ------------------------------------------------------- */
+void    SPI_WIFI_MspInit(SPI_HandleTypeDef* hspi);
+int8_t  SPI_WIFI_DeInit(void);
+int8_t  SPI_WIFI_Init(uint16_t mode);
+int8_t  SPI_WIFI_ResetModule(void);
+int16_t SPI_WIFI_ReceiveData(uint8_t *pData, uint16_t len, uint32_t timeout);
+int16_t SPI_WIFI_SendData( uint8_t *pData, uint16_t len, uint32_t timeout);
+void    SPI_WIFI_Delay(uint32_t Delay);
+void	SPI_WIFI_ISR(void);
 
 #ifdef __cplusplus
 }
 #endif
-#endif /*__ES_WIFI_CONF_H*/
+
+#endif /* __WIFI_IO__ */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
