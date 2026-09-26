@@ -16,7 +16,7 @@ function matching(items) { return items.filter(x => !$('deviceFilter').value || 
 function page(name) {
   document.querySelectorAll('.page').forEach(x => x.hidden = x.id !== name);
   document.querySelectorAll('nav [data-page]').forEach(x => x.classList.toggle('selected', x.dataset.page === name));
-  $('pageTitle').textContent = {monitor:'Activity & alerts',trials:'Motion trials',events:'Event log'}[name];
+  $('pageTitle').textContent = {monitor:'Overview',trials:'Motion trials',events:'Event log'}[name];
 }
 document.querySelectorAll('[data-page]').forEach(x => x.onclick = () => page(x.dataset.page));
 function ackHTML(e) {
@@ -41,7 +41,7 @@ function render() {
   $('attention').innerHTML = alarms.length ? alarms.map(d => {
     const event = state.events.find(e => e.device === d.device && e.boot === d.boot && e.incident === d.incident && ['fall','sos'].includes(e.type));
     return `<article class="alarm-card"><p class="eyebrow">${d.online?'ACTIVE ALERT':'LAST KNOWN ALERT · DEVICE OFFLINE'}</p><h3>${d.reason==='manual_sos'?'Help requested':'Fall detected'}</h3><p>${esc(d.device)} · ${esc(human(d.reason))}</p>${event?ackHTML(event):'<p>Waiting for incident details.</p>'}<p class="footnote">Marking seen records caregiver acknowledgement. Clear the board alarm locally with B2.</p></article>`;
-  }).join('') : `<div class="all-clear"><span class="status-mark">${devices.length && devices.every(d=>d.online)?'✓':'—'}</span><div><h3>${!devices.length?'Waiting for a device':devices.some(d=>!d.online)?'Some devices are offline':'No active alerts'}</h3><p>${devices.some(d=>!d.online)?'An offline device’s current condition is unknown.':'Based on the latest received device states.'}</p></div></div>`;
+  }).join('') : `<div class="all-clear"><div><h3>${!devices.length?'Waiting for a device':devices.some(d=>!d.online)?'Some devices are offline':'No active alerts'}</h3><p>${devices.some(d=>!d.online)?'An offline device’s current condition is unknown.':'Latest received state.'}</p></div></div>`;
   bindAck($('attention'));
   $('recent').innerHTML = events.slice(0,5).map(e => `<div class="activity-row"><time>${esc(new Date(e.received*1000).toLocaleTimeString())}</time><div><strong>${esc(human(e.type))}</strong><p>${esc(e.device)} · ${esc(human(e.reason))}</p></div></div>`).join('') || '<div class="empty">Events will appear here as they arrive.</div>';
   renderEvents(); renderCaptures();
@@ -115,7 +115,7 @@ async function refresh() {
     const ids=new Set(next.events.filter(e=>['fall','sos'].includes(e.type)).map(e=>`${e.device}/${e.boot}/${e.seq}`));
     if(sound && seen && [...ids].some(id=>!seen.has(id)))chime();seen=ids;state=next;connected=true;
     const old=$('deviceFilter').value;$('deviceFilter').innerHTML='<option value="">All devices</option>'+state.devices.map(d=>`<option value="${esc(d.device)}">${esc(d.device)}</option>`).join('');$('deviceFilter').value=old;
-    $('connectionDot').className='live';$('connectionLabel').textContent='Receiver connected';$('status').textContent='Caregiver acknowledgement records that an alert was seen. It does not silence the board or confirm recovery.';
+    $('connectionDot').className='live';$('connectionLabel').textContent='Receiver connected';$('status').textContent='';
     $('updated').textContent='Updated '+new Date().toLocaleTimeString();render();
   } catch(error) {connected=false;$('connectionDot').className='failed';$('connectionLabel').textContent='Receiver unavailable';$('status').textContent='Connection lost — displayed data is stale. '+error.message;$('attention').innerHTML='<div class="alarm-card"><h3>Current status unavailable</h3><p>Reconnect to the receiver to verify device status.</p></div>';throw error;}
   finally {busy=false;}
