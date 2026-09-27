@@ -19,8 +19,7 @@ import time
 
 TYPES = {'fall', 'sos', 'local_ack', 'heartbeat', 'rejected'}
 STATES = {'STARTUP', 'NORMAL', 'WAIT_IMPACT', 'CONFIRM', 'FALL'}
-SENSOR_DEFAULTS = dict(revision=1, proximity=1, sound=1, beeps=0,
-                       near_mm=300, far_mm=800, sound_threshold=-300)
+SENSOR_DEFAULTS = dict(revision=1, sound=1, sound_threshold=-300)
 
 
 def validate_sensor(data):
@@ -29,7 +28,6 @@ def validate_sensor(data):
         if not isinstance(data.get(name),str) or not re.fullmatch(pattern,data[name]):
             raise ValueError('Invalid '+name)
     limits = {'seq':(1,0xFFFFFFFF),'uptime_ms':(0,0xFFFFFFFF),'config_revision':(0,2147483647),
-              'distance_mm':(-1,2000),'range_status':(-2,255),'proximity_active':(0,1),
               'sound_dbfs':(-960,0),'sound_valid':(0,1),'sound_active':(0,1),'sound_masked':(0,1),
               'sound_events':(0,0xFFFFFFFF),'audio_overruns':(0,0xFFFFFFFF),'mic_error':(0,255)}
     for name,(low,high) in limits.items():
@@ -37,11 +35,9 @@ def validate_sensor(data):
 
 
 def validate_sensor_config(c):
-    for key in ['proximity','sound','beeps','near_mm','far_mm','sound_threshold']:
+    for key in ['sound','sound_threshold']:
         if type(c.get(key)) is not int: raise ValueError('Invalid '+key)
-    if any(c[k] not in (0,1) for k in ['proximity','sound','beeps']): raise ValueError('Invalid switch')
-    if not 50<=c['near_mm']<=1000 or not c['near_mm']+100<=c['far_mm']<=2000:
-        raise ValueError('Near must be 50–1000 mm; warning distance must be at least 100 mm further, up to 2000 mm')
+    if c['sound'] not in (0,1): raise ValueError('Invalid switch')
     if not -800<=c['sound_threshold']<=-50: raise ValueError('Sound threshold must be -80 to -5 dBFS')
 
 
@@ -102,7 +98,8 @@ class Store:
     def sensor_config(self, device):
         # Caller holds self.lock.
         row=self.db.execute('SELECT payload FROM sensor_settings WHERE device=?',(device,)).fetchone()
-        return json.loads(row[0]) if row else dict(SENSOR_DEFAULTS)
+        saved=json.loads(row[0]) if row else {}
+        return {k:saved.get(k,v) for k,v in SENSOR_DEFAULTS.items()}
 
     def configure_sensors(self, data):
         if not isinstance(data,dict): raise ValueError('Expected settings object')
@@ -137,7 +134,7 @@ class Store:
             # Bounded rolling telemetry storage: keep the latest 1800 samples/device.
             self.db.execute('DELETE FROM sensor_samples WHERE rowid IN (SELECT rowid FROM sensor_samples WHERE device=? ORDER BY received DESC LIMIT -1 OFFSET 1800)',(device,))
             c=self.sensor_config(device)
-        return f'ACK {boot}-s{seq}\nCFG {c["revision"]} {c["proximity"]} {c["sound"]} {c["beeps"]} {c["near_mm"]} {c["far_mm"]} {c["sound_threshold"]}\n'
+        return f'ACK {boot}-s{seq}\nSOUND {c["revision"]} {c["sound"]} {c["sound_threshold"]}\n'
 
     def accept(self, event):
         validate_event(event)
@@ -266,7 +263,7 @@ class Store:
                 samples=[]
                 for seen,encoded in self.db.execute('SELECT received,payload FROM sensor_samples WHERE device=? AND boot=? ORDER BY seq DESC LIMIT 120',(device,boot)):
                     p=json.loads(encoded)
-                    samples.append(dict(received=seen,uptime_ms=p['uptime_ms'],distance_mm=p['distance_mm'],sound_dbfs=p['sound_dbfs'],sound_valid=p['sound_valid'],sound_masked=p['sound_masked']))
+                    samples.append(dict(received=seen,uptime_ms=p['uptime_ms'],sound_dbfs=p['sound_dbfs'],sound_valid=p['sound_valid'],sound_masked=p['sound_masked']))
                 item['history']=list(reversed(samples))
                 sensors.append(item)
         return {'devices': devices, 'events': history, 'captures': captures, 'sensors':sensors, 'server_time': now}
@@ -274,14 +271,17 @@ class Store:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'ElderCare/1.0'
+    protocol_version = 'HTTP/1.1'
 
     def setup(self):
         super().setup()
-        self.connection.settimeout(5)
+        self.connection.settimeout(30)
+        self.connection.setsockopt(__import__("socket").IPPROTO_TCP, __import__("socket").TCP_NODELAY, 1)
 
     def reply(self, status, body, content_type='application/json'):
         if isinstance(body, str):
             body = body.encode()
+        if status >= 400: self.close_connection = True
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))

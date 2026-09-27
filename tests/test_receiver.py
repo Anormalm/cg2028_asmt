@@ -1,4 +1,5 @@
 import copy
+import http.client
 import importlib.util
 import json
 from pathlib import Path
@@ -23,7 +24,7 @@ def event(seq=1, kind='fall', state='FALL'):
 
 def sensor(seq=1):
     return dict(device='test-board',boot='0123456789abcdef',seq=seq,uptime_ms=2000,
-                config_revision=0,distance_mm=450,range_status=0,proximity_active=1,
+                config_revision=0,
                 sound_dbfs=-420,sound_valid=1,sound_active=0,sound_masked=0,
                 sound_events=2,audio_overruns=0,mic_error=0)
 
@@ -147,37 +148,56 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request('/api/state'))['events'][0]['rejection_flags'],10)
 
     def test_sensor_settings_delivery_and_confirmation(self):
-        self.assertEqual(self.request('/api/sensors',sensor()),b'ACK 0123456789abcdef-s1\nCFG 1 1 1 0 300 800 -300\n')
+        self.assertEqual(self.request('/api/sensors',sensor()),b'ACK 0123456789abcdef-s1\nSOUND 1 1 -300\n')
         data=json.loads(self.request('/api/state'))['sensors'][0]
         self.assertTrue(data['online'])
         self.assertEqual(data['config_revision'],0)
         self.assertEqual(data['settings']['revision'],1)
-        settings=dict(data['settings'],device='test-board',beeps=1,near_mm=200,far_mm=600,sound_threshold=-450)
+        settings=dict(data['settings'],device='test-board',sound_threshold=-450)
         saved=json.loads(self.request('/api/sensor-settings',settings))
         self.assertEqual(saved['revision'],2)
         with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensor-settings',settings)
         second=sensor(2)
-        self.assertIn(b'CFG 2 1 1 1 200 600 -450\n',self.request('/api/sensors',second))
+        self.assertIn(b'SOUND 2 1 -450\n',self.request('/api/sensors',second))
         second=sensor(3);second['config_revision']=2
         self.request('/api/sensors',second)
         data=json.loads(self.request('/api/state'))['sensors'][0]
         self.assertEqual(data['config_revision'],data['settings']['revision'])
         self.assertEqual(len(data['history']),3)
         reopened=receiver.Store(self.path)
-        self.assertEqual(reopened.state()['sensors'][0]['settings']['beeps'],1)
+        self.assertEqual(reopened.state()['sensors'][0]['settings']['sound_threshold'],-450)
         reopened.db.close()
+
+    def test_sound_keep_alive_and_saved_settings_migration(self):
+        with self.server.store.lock,self.server.store.db:
+            self.server.store.db.execute('INSERT INTO sensor_settings VALUES(?,?)',
+                ('test-board',json.dumps(dict(revision=5,sound=1,sound_threshold=-400,legacy_field=123))))
+        conn=http.client.HTTPConnection('127.0.0.1',self.server.server_port)
+        try:
+            for seq in (1,2,3):
+                conn.request('POST','/api/sensors',json.dumps(sensor(seq)),
+                             {'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'})
+                response=conn.getresponse()
+                self.assertEqual(response.status,200)
+                self.assertEqual(response.read(),f'ACK 0123456789abcdef-s{seq}\nSOUND 5 1 -400\n'.encode())
+                self.assertFalse(response.will_close)
+                if seq==1: connection=conn.sock
+                else: self.assertIs(conn.sock,connection)
+            saved=self.server.store.state()['sensors'][0]['settings']
+            self.assertEqual(set(saved),{'revision','sound','sound_threshold'})
+        finally: conn.close()
 
     def test_sensor_validation_retries_and_staleness(self):
         self.request('/api/sensors',sensor())
         self.request('/api/sensors',sensor())
         self.assertEqual(len(json.loads(self.request('/api/state'))['sensors'][0]['history']),1)
-        bad=sensor();bad['distance_mm']=999
+        bad=sensor();bad['sound_dbfs']=-100
         with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',bad)
-        for name,value in [('sound_dbfs',1),('distance_mm',-2),('sound_valid',True),('device','<script>')]:
+        for name,value in [('sound_dbfs',1),('sound_valid',True),('device','<script>')]:
             bad=sensor(2);bad[name]=value
             with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',bad)
         with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensors',sensor(3),token='wrong')
-        bad=dict(receiver.SENSOR_DEFAULTS,device='test-board',near_mm=800,far_mm=700)
+        bad=dict(receiver.SENSOR_DEFAULTS,device='test-board',sound=2)
         with self.assertRaises(urllib.error.HTTPError):self.request('/api/sensor-settings',bad)
         rebooted=sensor(1);rebooted['boot']='abcdef0123456789'
         self.request('/api/sensors',rebooted)

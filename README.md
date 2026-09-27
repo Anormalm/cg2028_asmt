@@ -1,5 +1,9 @@
 # ElderCare: buzzer and Wi-Fi alerts
 
+For assignment requirements, reproducible software evidence and the physical
+demonstration procedure, see [the demonstration guide](../DEMONSTRATION.md).
+Software passes are recorded separately from pending on-board trials.
+
 Branch: `feature/buzzer-wifi-alerts`. This project includes the latest detector
 and overflow-safe assembly filter, a Grove buzzer, manual SOS, and a Wi-Fi
 receiver/dashboard. The OLED is not part of this branch.
@@ -9,7 +13,8 @@ receiver/dashboard. The OLED is not part of this branch.
 Power off first. Fit the Grove Base Shield to the board's Arduino headers, set
 its voltage selector to **3.3 V**, and connect the standard **Grove Buzzer to D6**.
 D6 maps to **PB1** on B-L4S5I-IOT01A. Do not use an I2C or UART Grove connector.
-A passive buzzer requires a PWM implementation and is not supported by this code.
+The current driver uses TIM3 PWM for pitch control, as detailed below. Verify
+the actual module's sound on hardware before the demonstration.
 
 ## 2. Configure Wi-Fi
 

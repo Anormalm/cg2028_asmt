@@ -10,16 +10,15 @@
 </section>
 <section id="sensors" class="page" hidden>
 <div class="sensor-toolbar"><label>Device <select id="sensorDevice" aria-label="Sensor device"></select></label><span id="sensorUpdated" class="muted">Waiting for sensor data</span></div>
-<p id="sensorEmpty" class="empty">No sensor data yet. Build and flash the proximity/audio firmware, then resume the board.</p>
+<p id="sensorEmpty" class="empty">No sensor data yet. Build and flash the sound activity firmware, then resume the board.</p>
 <div id="sensorContent" hidden>
 <div class="sensor-grid">
-<article class="sensor-panel"><div class="section-heading"><h2>Proximity</h2><span id="proximityStatus" class="muted"></span></div><p class="sensor-reading" id="distanceValue">--</p><p class="muted">Distance in front of the board</p><div id="distancePlot"></div><p class="footnote">Invalid or out-of-range readings are left blank. Beeps speed up between the warning and near distances.</p></article>
-<article class="sensor-panel"><div class="section-heading"><h2>Sound activity</h2><span id="soundStatus" class="muted"></span></div><p class="sensor-reading" id="soundValue">--</p><p class="muted" id="soundCount"></p><div id="soundPlot"></div><p class="footnote">Relative digital level (dBFS), not calibrated sound pressure. Only levels and counts are sent; audio is not stored or streamed.</p></article>
+<article class="sensor-panel"><div class="section-heading"><h2>Sound activity</h2><span id="soundStatus" class="muted"></span></div><p class="sensor-reading" id="soundValue">--</p><p class="muted" id="soundCount"></p><div id="soundPlot"></div><p class="footnote">Peak level since the previous upload (dBFS), not calibrated sound pressure. Only levels and counts are sent; audio is not stored or streamed.</p></article>
 </div>
 <form id="sensorSettings" class="sensor-settings">
 <div class="section-heading"><h2>Sensor settings</h2><span id="settingsApplied" class="muted"></span></div>
-<div class="sensor-switches"><label><input id="proximityEnabled" type="checkbox"> Proximity monitoring</label><label><input id="proximityBeeps" type="checkbox"> Proximity beeps</label><label><input id="soundEnabled" type="checkbox"> Sound activity monitoring</label></div>
-<div class="sensor-fields"><label>Near distance (mm)<input id="nearDistance" type="number" min="50" max="1000" step="10" required></label><label>Warning distance (mm)<input id="farDistance" type="number" min="150" max="2000" step="10" required></label><label>Activity threshold (dBFS)<input id="soundThreshold" type="number" min="-80" max="-5" step="1" required></label></div>
+<div class="sensor-switches"><label><input id="soundEnabled" type="checkbox"> Sound activity monitoring</label></div>
+<div class="sensor-fields"><label>Activity threshold (dBFS)<input id="soundThreshold" type="number" min="-80" max="-5" step="1" required></label></div>
 <div class="sensor-save"><button id="saveSensors" type="submit">Save settings</button><button id="reloadSensors" type="button" class="quiet">Reload settings</button><span id="sensorSaveStatus" role="status" class="muted"></span></div>
 <p class="footnote">Settings apply when the board next contacts this receiver. Fall/SOS alarms take priority. Activity counting ignores the board buzzer and 400 ms afterwards.</p>
 </form></div></section>

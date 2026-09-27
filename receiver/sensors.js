@@ -3,11 +3,7 @@ let sensorSelected = '', sensorFormDevice = '', sensorRevision = 0, sensorDirty 
 function sensorItem() { return (state.sensors || []).find(s => s.device === sensorSelected); }
 function fillSensorSettings(s) {
   const c = s.settings;
-  $('proximityEnabled').checked = !!c.proximity;
-  $('proximityBeeps').checked = !!c.beeps;
   $('soundEnabled').checked = !!c.sound;
-  $('nearDistance').value = c.near_mm;
-  $('farDistance').value = c.far_mm;
   $('soundThreshold').value = c.sound_threshold / 10;
   sensorRevision = c.revision; sensorFormDevice = s.device; sensorDirty = false;
 }
@@ -21,16 +17,12 @@ function renderSensors() {
   if (!s) { $('sensorUpdated').textContent = 'Waiting for sensor data'; return; }
   const fresh = connected && s.online;
   $('sensorUpdated').textContent = (fresh ? 'Received ' : 'Stale data - last received ') + date(s.received);
-  $('distanceValue').textContent = fresh && s.distance_mm >= 0 ? `${s.distance_mm} mm` : '--';
-  $('proximityStatus').textContent = !fresh ? 'Unavailable' : s.range_status === -1 ? 'Disabled' : s.range_status === -2 ? 'Sensor error' : s.distance_mm < 0 ? 'No valid range' : s.proximity_active ? 'Object nearby' : 'Clear';
-  $('proximityStatus').classList.toggle('sensor-alert', fresh && !!s.proximity_active);
   $('soundValue').textContent = fresh && s.sound_valid ? `${(s.sound_dbfs/10).toFixed(1)} dBFS` : '--';
   $('soundStatus').textContent = !fresh ? 'Unavailable' : s.mic_error ? `Microphone error ${s.mic_error}` : !s.sound_valid ? (s.config_revision === s.settings.revision && !s.settings.sound ? 'Disabled' : 'Waiting for samples') : s.sound_masked ? 'Device sound excluded' : s.sound_active ? 'Activity' : 'Quiet';
   $('soundCount').textContent = `${s.sound_events} activity bursts since boot`;
   const applied = s.config_revision === s.settings.revision;
   $('settingsApplied').textContent = !fresh ? 'Board unavailable - settings may be pending' : applied ? 'Applied on board' : 'Waiting for board to apply settings';
   if (sensorFormDevice !== s.device || (!sensorDirty && sensorRevision !== s.settings.revision)) fillSensorSettings(s);
-  sensorPlot('distancePlot', s.history, 'distance_mm', 0, 2000, s.settings.far_mm, 'Distance (mm)');
   sensorPlot('soundPlot', s.history, 'sound_dbfs', -960, 0, s.settings.sound_threshold, 'Sound level (dBFS)');
 }
 function sensorPlot(id, history, field, low, high, threshold, title) {
@@ -40,7 +32,7 @@ function sensorPlot(id, history, field, low, high, threshold, title) {
   const x=t=>left+(t-start)/span*(width-left-right),y=v=>top+(high-v)/(high-low)*(height-top-bottom);
   let paths=[],line=[],previous=null;
   for(const p of history) {
-    const valid=field==='distance_mm' ? p[field]>=0 : p.sound_valid && !p.sound_masked;
+    const valid=p.sound_valid && !p.sound_masked;
     if(!valid || (previous!==null && p.received-previous>5)) {if(line.length)paths.push(line);line=[];}
     if(valid)line.push(`${x(p.received).toFixed(1)},${y(p[field]).toFixed(1)}`);
     previous=p.received;
@@ -60,10 +52,7 @@ document.getElementById('reloadSensors').onclick=()=>{
 };
 document.getElementById('sensorSettings').onsubmit=async e=>{
   e.preventDefault();const s=sensorItem();if(!s)return;
-  const body={device:s.device,revision:sensorRevision,proximity:Number($('proximityEnabled').checked),
-    sound:Number($('soundEnabled').checked),beeps:Number($('proximityBeeps').checked),
-    near_mm:Number($('nearDistance').value),far_mm:Number($('farDistance').value),sound_threshold:Math.round(Number($('soundThreshold').value)*10)};
-  if(body.far_mm<body.near_mm+100){$('sensorSaveStatus').textContent='Warning distance must exceed near distance by at least 100 mm.';return;}
+  const body={device:s.device,revision:sensorRevision,sound:Number($('soundEnabled').checked),sound_threshold:Math.round(Number($('soundThreshold').value)*10)};
   $('saveSensors').disabled=true;
   try {
     const c=await(await api('/api/sensor-settings',body)).json();

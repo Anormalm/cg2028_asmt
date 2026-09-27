@@ -4,25 +4,23 @@
 #include "buzzer.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "../ToF/vl53l0x_api.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-extern I2C_HandleTypeDef hI2cHandler;
-static VL53L0X_Dev_t tof;
-static int tof_ready;
 static DFSDM_Channel_HandleTypeDef channel;
 static DFSDM_Filter_HandleTypeDef filter;
 static DMA_HandleTypeDef microphone_dma;
 static int32_t audio_dma[512], audio_latest[256], audio_work[256];
 static volatile uint32_t audio_sequence, audio_fault;
-static uint32_t consumed, audio_at, range_at, poll_at, buzzer_at, loud_at, quiet_at, prox_at;
-static int buzzer_seen, loud, loud_seen, prox_votes;
-static SensorConfig requested = {0,1,1,0,300,800,-300};
-static SensorConfig config = {0,1,1,0,300,800,-300};
-static SensorSnapshot current = {.distance_mm=-1, .range_status=-2, .sound_dbfs=-960};
+static uint32_t consumed, audio_at, buzzer_at, loud_at, quiet_at;
+static int buzzer_seen, loud, loud_seen;
+static SensorConfig requested = {0,1,-300};
+static SensorConfig config = {0,1,-300};
+static SensorSnapshot current = {.sound_dbfs=-960};
 static SensorSnapshot published;
+static int upload_peak=-960, upload_active, upload_valid;
+static uint32_t upload_at;
 
 static int Microphone_Init(void)
 {
@@ -98,35 +96,8 @@ void HAL_DFSDM_FilterRegConvCpltCallback(DFSDM_Filter_HandleTypeDef *h)
 void HAL_DFSDM_FilterErrorCallback(DFSDM_Filter_HandleTypeDef *h)
 { if (h == &filter) audio_fault = 7; }
 
-static int Proximity_Init(void)
-{
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    GPIO_InitTypeDef pin = {0};
-    pin.Pin = VL53L0X_XSHUT_Pin;
-    pin.Mode = GPIO_MODE_OUTPUT_PP;
-    pin.Pull = GPIO_NOPULL;
-    pin.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(VL53L0X_XSHUT_GPIO_Port, &pin);
-    HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, pin.Pin, GPIO_PIN_RESET);
-    HAL_Delay(2);
-    HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, pin.Pin, GPIO_PIN_SET);
-    HAL_Delay(5);
-    tof.I2cHandle = &hI2cHandler;
-    tof.I2cDevAddr = 0x52;
-    uint8_t vhv, phase, aperture;
-    uint32_t spads;
-    if (VL53L0X_DataInit(&tof) || VL53L0X_StaticInit(&tof) ||
-        VL53L0X_PerformRefCalibration(&tof, &vhv, &phase) ||
-        VL53L0X_PerformRefSpadManagement(&tof, &spads, &aperture) ||
-        VL53L0X_SetDeviceMode(&tof, VL53L0X_DEVICEMODE_CONTINUOUS_RANGING) ||
-        VL53L0X_SetMeasurementTimingBudgetMicroSeconds(&tof, 33000) ||
-        VL53L0X_StartMeasurement(&tof)) return 0;
-    return 1;
-}
 void ExtraSensors_Init(void)
 {
-    /* Startup only: calibration waits occur before the scheduler starts. */
-    tof_ready = Proximity_Init();
     current.mic_error = Microphone_Init();
     published = current;
 }
@@ -136,7 +107,16 @@ void ExtraSensors_Configure(const SensorConfig *c)
     taskENTER_CRITICAL(); requested = *c; taskEXIT_CRITICAL();
 }
 void ExtraSensors_Get(SensorSnapshot *s)
-{ taskENTER_CRITICAL(); *s = published; taskEXIT_CRITICAL(); }
+{
+    taskENTER_CRITICAL();
+    *s = published;
+    /* Preserve short unmasked bursts between network uploads; no old queue. */
+    if (upload_valid && s->sound_valid && !s->sound_masked) {
+        s->sound_dbfs=upload_peak; s->sound_active=upload_active;
+    }
+    upload_peak=-960; upload_active=0; upload_valid=0;
+    taskEXIT_CRITICAL();
+}
 
 void ExtraSensors_Update(uint32_t now)
 {
@@ -145,34 +125,6 @@ void ExtraSensors_Update(uint32_t now)
     current.config_revision = config.revision;
     if (buzzer_frequency_hz) { buzzer_at=now; buzzer_seen=1; }
     current.sound_masked = buzzer_seen && (uint32_t)(now-buzzer_at)<400U;
-    if (tof_ready && (uint32_t)(now-poll_at)>=100U) {
-        poll_at=now;
-        int new_range=0;
-        uint8_t ready=0;
-        VL53L0X_RangingMeasurementData_t result;
-        if (VL53L0X_GetMeasurementDataReady(&tof,&ready)) {
-            current.range_status=-2; current.distance_mm=-1;
-        } else if (ready) {
-            if (VL53L0X_GetRangingMeasurementData(&tof,&result) || VL53L0X_ClearInterruptMask(&tof,0)) {
-                current.range_status=-2; current.distance_mm=-1;
-            } else {
-                range_at=now;
-                new_range=1;
-                current.range_status=result.RangeStatus;
-                current.distance_mm=result.RangeStatus==0 && result.RangeMilliMeter<=2000 ? result.RangeMilliMeter : -1;
-            }
-        }
-        if (new_range && current.distance_mm>=0 && current.distance_mm<(int)config.far_mm) {
-            if (prox_votes<2) ++prox_votes;
-            if(prox_votes==2 && !current.proximity_active) {current.proximity_active=1;prox_at=now;}
-        } else if(current.distance_mm<0 || current.distance_mm>(int)config.far_mm+50) {
-            prox_votes=0; current.proximity_active=0;
-        }
-    }
-    if ((uint32_t)(now-range_at)>300U || !config.proximity) {
-        current.distance_mm=-1; current.proximity_active=0; prox_votes=0;
-        if (!config.proximity) current.range_status=-1;
-    }
     uint32_t seq;
     taskENTER_CRITICAL();
     seq=audio_sequence;
@@ -200,11 +152,18 @@ void ExtraSensors_Update(uint32_t now)
     } else if(!current.sound_valid || current.sound_masked ||
               (current.sound_dbfs<config.sound_threshold-30 && (uint32_t)(now-quiet_at)>=500U)) loud=0;
     current.sound_active=loud && current.sound_valid && !current.sound_masked;
-    taskENTER_CRITICAL(); published=current; taskEXIT_CRITICAL();
+    taskENTER_CRITICAL();
+    published=current;
+    /* Drop old peaks after outages instead of replaying delayed activity. */
+    if (!upload_valid || (uint32_t)(now-upload_at)>=500U) {
+        upload_peak=-960; upload_active=0; upload_at=now;
+    }
+    if (current.sound_valid && !current.sound_masked) {
+        if (current.sound_dbfs>upload_peak) upload_peak=current.sound_dbfs;
+        upload_active |= current.sound_active; upload_valid=1;
+    } else {upload_peak=-960; upload_active=0; upload_valid=0;}
+    taskEXIT_CRITICAL();
 }
-uint32_t ExtraSensors_ProximityTone(uint32_t now)
-{ return ProximityTone(current.proximity_active,current.distance_mm,now-prox_at,&config); }
-
 int ExtraSensors_ParseReply(const char *response, const char *expected)
 {
     const char *body=strstr(response,"\r\n\r\n");
@@ -214,7 +173,7 @@ int ExtraSensors_ParseReply(const char *response, const char *expected)
     if(strncmp(body,expected,n)) return 0;
     SensorConfig c={0}; unsigned long revision; int used=0;
     const char *line=body+n;
-    if(sscanf(line,"CFG %lu %u %u %u %u %u %d%n",&revision,&c.proximity,&c.sound,&c.beeps,&c.near_mm,&c.far_mm,&c.sound_threshold,&used)!=7) return 0;
+    if(sscanf(line,"SOUND %lu %u %d%n",&revision,&c.sound,&c.sound_threshold,&used)!=3) return 0;
     if(strcmp(line+used,"\n")) return 0; /* Wait for a complete TCP response. */
     c.revision=(uint32_t)revision;
     if(!SensorConfig_Valid(&c)) return 0;

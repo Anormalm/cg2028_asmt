@@ -32,6 +32,7 @@ static void NetworkFailure(NetworkStep step, int status)
 }
 
 static char boot_id[17];
+static int socket_open;
 static uint8_t server_ip[4] = ALERT_SERVER_IP;
 
 int AlertNetwork_Init(void)
@@ -119,20 +120,22 @@ static int ValidConfig(void)
 
 static int PostPayload(const char *path, const char *body, const char *expected, int sensor_reply)
 {
-    char request[1300], response[512];
+    char request[1300], response[512]={0};
     int body_length = (int)strlen(body);
     int length = snprintf(request, sizeof(request),
         "POST %s HTTP/1.1\r\nHost: %u.%u.%u.%u:%u\r\n"
         "Authorization: Bearer %s\r\nContent-Type: application/json\r\n"
-        "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
+        "Content-Length: %d\r\nConnection: keep-alive\r\n\r\n%s",
         path, server_ip[0], server_ip[1], server_ip[2], server_ip[3], ALERT_SERVER_PORT,
         ALERT_TOKEN, body_length, body);
     if (length < 0 || length >= (int)sizeof(request)) return 0;
     network_http_status = 0;
     network_step = NET_STEP_SOCKET;
-    WIFI_Status_t status = WIFI_OpenClientConnection(0, WIFI_TCP_PROTOCOL, "care", server_ip,
+    WIFI_Status_t status = WIFI_STATUS_OK;
+    if (!socket_open) status = WIFI_OpenClientConnection(0, WIFI_TCP_PROTOCOL, "care", server_ip,
                                                     ALERT_SERVER_PORT, 0);
     if (status != WIFI_STATUS_OK) { NetworkFailure(network_step, status); return 0; }
+    socket_open=1;
     uint16_t sent = 0;
     int success = 0;
     network_step = NET_STEP_SEND;
@@ -162,7 +165,9 @@ static int PostPayload(const char *path, const char *body, const char *expected,
     }
     if (!success && network_step != NET_STEP_RECEIVE)
         NetworkFailure(network_step, status == WIFI_STATUS_OK ? -1 : (int)status);
-    WIFI_CloseClientConnection(0);
+    if (!success || strstr(response,"Connection: close") || !strncmp(response,"HTTP/1.0",8)) {
+        WIFI_CloseClientConnection(0); socket_open=0;
+    }
     return success;
 }
 
@@ -230,11 +235,11 @@ static int PostSensors(void)
     char body[650], expected[64];
     int n=snprintf(body,sizeof(body),
         "{\"device\":\"%s\",\"boot\":\"%s\",\"seq\":%lu,\"uptime_ms\":%lu,"
-        "\"config_revision\":%lu,\"distance_mm\":%d,\"range_status\":%d,\"proximity_active\":%d,"
+        "\"config_revision\":%lu,"
         "\"sound_dbfs\":%d,\"sound_valid\":%d,\"sound_active\":%d,\"sound_masked\":%d,"
         "\"sound_events\":%lu,\"audio_overruns\":%lu,\"mic_error\":%d}",
         ALERT_DEVICE_ID,boot_id,(unsigned long)seq,(unsigned long)s.uptime_ms,
-        (unsigned long)s.config_revision,s.distance_mm,s.range_status,s.proximity_active,
+        (unsigned long)s.config_revision,
         s.sound_dbfs,s.sound_valid,s.sound_active,s.sound_masked,
         (unsigned long)s.sound_events,(unsigned long)s.audio_overruns,s.mic_error);
     if(n<0 || n>=(int)sizeof(body)) return 0;
@@ -252,6 +257,7 @@ void AlertNetwork_Task(void *argument)
     int connected = 0;
     uint32_t capture_part = 0;
     uint32_t sensors_at = 0;
+    int sensor_turn=1;
     uint32_t retry_ms = 1000U, heartbeat_at = HAL_GetTick();
     for (;;) {
         if (!connected) {
@@ -276,13 +282,15 @@ void AlertNetwork_Task(void *argument)
         int send_heartbeat = !queued &&
             (uint32_t)(HAL_GetTick() - heartbeat_at) >= ALERT_HEARTBEAT_MS;
         int result;
-        int send_sensors = !queued && !send_heartbeat && (uint32_t)(HAL_GetTick()-sensors_at)>=1000U;
-        if (send_sensors) {
-            result=PostSensors();
+        int send_sensors = !queued && !send_heartbeat && (uint32_t)(HAL_GetTick()-sensors_at)>=200U;
+        if (send_sensors && sensor_turn) {
+            sensor_turn=0;
             sensors_at=HAL_GetTick();
+            result=PostSensors();
         } else if (!queued && !send_heartbeat) {
+            sensor_turn=1;
             result = PostCapture(&capture_part);
-            if (result < 0) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+            if (result < 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
         } else {
             if (send_heartbeat) {
                 taskENTER_CRITICAL(); event = snapshot; taskEXIT_CRITICAL();
@@ -306,6 +314,6 @@ void AlertNetwork_Task(void *argument)
             vTaskDelay(pdMS_TO_TICKS(retry_ms));
             if (retry_ms < 30000U) retry_ms = retry_ms * 2 > 30000U ? 30000U : retry_ms * 2;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

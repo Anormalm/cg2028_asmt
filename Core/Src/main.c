@@ -291,10 +291,6 @@ static void SensorTask(void *argument)
         int fall_detected = (detector.state == FD_FALL_LATCHED);
         ExtraSensors_Update(now);
         uint32_t tone = AlertUI_BuzzerHz(&alert_ui, now);
-        /* Alarm and musical rests belong to their sequence, never fill them
-         * with proximity tones. Proximity warnings are NORMAL-only. */
-        if (detector.state == FD_NORMAL && !alert_ui.tuning && !alert_ui.chirping && !alert_ui.test_hz)
-            tone = ExtraSensors_ProximityTone(now);
         Buzzer_SetFrequency(tone);
         AlertEvent message = {0};
         message.uptime_ms = now;

@@ -126,5 +126,5 @@ $('login').onsubmit=async e=>{e.preventDefault();token=$('token').value.trim();$
 $('disconnectButton').onclick=()=>{token='';sessionStorage.removeItem('eldercare-token');location.reload();};
 $('deviceFilter').onchange=render;$('trialFilter').onchange=renderCaptures;
 $('search').oninput=renderEvents;$('eventFilter').onchange=renderEvents;
-setInterval(()=>refresh().catch(()=>{}),2000);render();
+setInterval(()=>refresh().catch(()=>{}),250);render();
 if(token)refresh().catch(()=>{});else $('connectDialog').showModal();
