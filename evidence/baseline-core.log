@@ -1,0 +1,2 @@
+PASS: 32725 actual ARM EWMA cases, including register/stack preservation
+PASS: 14 detector scenarios (synthetic filtered inputs)

@@ -119,3 +119,13 @@ on-board listening/timing verification while networking is active.
 
 Melody playback is now 1.5x speed and one octave higher. Tests verify scaled
 boundaries and doubled frequencies for all notes, with a 37.390-second duration.
+
+
+## OLED integration
+
+After a fresh firmware build, run `python tests/verify_oled.py`. It executes the
+compiled OLED functions with mocked HAL I2C calls: page-mode setup, full-frame
+transfers, normal/fall/SOS/acknowledgement screens, suppressed redundant redraws,
+25 ms timeouts, aborted failed frames and reinitialization recovery. Hardware
+acceptance, including sample timing under display/network load, remains pending;
+see `../DEMONSTRATION.md`.

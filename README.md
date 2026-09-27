@@ -1,12 +1,12 @@
 # ElderCare: buzzer and Wi-Fi alerts
 
 For assignment requirements, reproducible software evidence and the physical
-demonstration procedure, see [the demonstration guide](../DEMONSTRATION.md).
+demonstration procedure, see [the demonstration guide](DEMONSTRATION.md).
 Software passes are recorded separately from pending on-board trials.
 
-Branch: `feature/buzzer-wifi-alerts`. This project includes the latest detector
+Integration branch: `integration/felix-oled`. This project includes the latest detector
 and overflow-safe assembly filter, a Grove buzzer, manual SOS, and a Wi-Fi
-receiver/dashboard. The OLED is not part of this branch.
+receiver/dashboard, and Felix's OLED display.
 
 ## 1. Connect the buzzer
 
@@ -141,8 +141,8 @@ receipt time. Offline events can arrive later than their actual occurrence.
   `FALL`, with `why=manual_sos` and a distinct `sos` remote event.
 - The supplied Wi-Fi layer was integrated once, with bounds checks added to reset
   and receive handling. Do not add a second `es_wifi.c` to the project.
-- The optional OLED should use its own driver. Do not call Wi-Fi APIs from its
-  task, and do not access the onboard sensor I2C bus concurrently without a mutex.
+- **OLED task priority 1:** owns I2C1 on PB8/PB9; the motion sensors use I2C2.
+  Display transfers have 25 ms timeouts and failed displays retry after 5 s.
 
 ## Verification
 
@@ -277,3 +277,39 @@ listening, since debugger halts also pause the one-second timeout.
 Different pitches that sound harsh suggest the note range/timbre needs adjustment;
 identical pitches, severe distortion or uneven sustained tones need further
 hardware/timing checks. The actual sound must still be checked on the module. The alarm pitches are unchanged.
+
+
+## Felix OLED integration
+
+Use a **128x64 SSD1306 I2C OLED, address 0x3C**, matching Felix's driver.
+With power off, connect SCL to **PB8 / Arduino D15**, SDA to **PB9 / Arduino D14**,
+GND to GND and module power to **3.3 V**. Confirm the module pin labels; their
+physical order varies. I2C pull-ups must go to 3.3 V. The timing targets roughly
+100 kHz with the integrated application's 80 MHz peripheral clock; validate the
+actual module/bus on hardware. A different controller/address needs driver changes.
+
+- No latched alarm: Felix's smiley face (including candidate/settling states).
+- Confirmed fall: alternate the frown and FALL DETECTED screen every second.
+- Manual SOS: alternate the frown and SOS; this is not evidence of fall detection.
+- Local B2 acknowledgement: return to smiley. Dashboard Mark seen does not clear it.
+- Live Expressions: `oled_online` is 1 after successful transfers, 0 after failure;
+  `oled_errors` counts failed transfers/initialization attempts. It is not a
+  continuous presence check while an unchanged screen needs no transfer.
+
+Only the display task accesses its framebuffer/I2C1. The sensor task publishes a
+single aligned status word without waiting for the display. Unchanged normal
+screens are not resent. On a transfer error, the remaining frame is aborted and
+initialization retries after five seconds. OLED absence must be rehearsed while
+watching `dtMax`, `err`, LED, buzzer, and button response. Emulator checks cannot
+establish electrical timing, OLED legibility, or RTOS timing on the board.
+
+The merge keeps the existing overflow-safe EWMA and independent C reference;
+Felix's starter detection placeholder and assembly-as-C comparison are superseded
+by the integrated detector. His drawings remain in `Core/Src/oled.c`.
+
+After building, run `python tests/verify_oled.py`. The complete local evidence
+runner is `python scripts/verify_assignment.py --toolchain "PATH_TO_ARM_TOOLCHAIN_BIN"`.
+Its published-vector and baseline checks also require the sibling assignment/test
+projects and supplied PDFs from the original Lab3 workspace. Results are saved in
+[evidence/AUTOMATED_RESULTS.md](evidence/AUTOMATED_RESULTS.md). Follow
+[DEMONSTRATION.md](DEMONSTRATION.md) for the hardware acceptance sequence.

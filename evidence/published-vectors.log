@@ -1,0 +1,7 @@
+PASS: all three projects contain identical assembly
+PASS: published case 1, alpha=25, 16 samples x 3 axes, exact PDF results
+PASS: published case 2, alpha=50, 16 samples x 3 axes, exact PDF results
+PASS: published case 3, alpha=10, 16 samples x 3 axes, exact PDF results
+PASS: published case 4, alpha=75, 16 samples x 3 axes, exact PDF results
+PASS: published case 5, alpha=33, 16 samples x 3 axes, exact PDF results
+PASS: 240 sequential axis outputs; source vectors match the board test harness

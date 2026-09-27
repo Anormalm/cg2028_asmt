@@ -1,7 +1,7 @@
 """Reproduce software evidence; does not flash hardware or claim physical accuracy.
 
 Requires Python 3.10+, pypdf, unicorn, pyelftools and ARM GCC.
-Run with --toolchain PATH_TO_ARM_GCC_BIN. Reports go to Lab3/evidence.
+Run with --toolchain PATH_TO_ARM_GCC_BIN. Reports go to the enhancement project evidence/ directory.
 """
 import argparse
 from datetime import datetime, timezone
@@ -12,8 +12,8 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[2]
-ENH = ROOT / 'CG2028_Enhancements'
+ENH = Path(__file__).resolve().parents[1]
+ROOT = ENH.parent
 sys.path.insert(0, str(ENH / 'tests'))
 from verify_core import load, call
 from pypdf import PdfReader
@@ -68,13 +68,14 @@ def main():
     if args.published_only:
         published_cases(args.toolchain)
         return
-    evidence = ROOT / 'evidence'
+    evidence = ENH / 'evidence'
     evidence.mkdir(exist_ok=True)
     jobs = [
         ('published-vectors', [sys.executable, str(Path(__file__).resolve()), '--toolchain', str(args.toolchain), '--published-only'], ROOT),
         ('baseline-core', [sys.executable, 'tests/verify_core.py', '--toolchain', str(args.toolchain)], ROOT / 'CG2028_Assignment'),
         ('enhancement-core', [sys.executable, 'tests/verify_core.py', '--toolchain', str(args.toolchain)], ENH),
         ('firmware-build', [sys.executable, 'scripts/build_firmware.py', '--toolchain', str(args.toolchain)], ENH),
+        ('oled', [sys.executable, 'tests/verify_oled.py'], ENH),
         ('sensor-and-buzzer', [sys.executable, 'tests/verify_sensor_firmware.py'], ENH),
         ('receiver', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_receiver.py'], ENH),
         ('dashboard-app-syntax', ['node', '--check', 'receiver/app.js'], ENH),
@@ -83,7 +84,7 @@ def main():
     results = []
     build_ok = False
     for name, command, cwd in jobs:
-        if name == 'sensor-and-buzzer' and not build_ok:
+        if name in ('sensor-and-buzzer', 'oled') and not build_ok:
             results.append((name, 'BLOCKED: fresh build failed'))
             continue
         try:
@@ -119,6 +120,7 @@ def main():
                '- Repeated physical fall, normal-activity and near-fall trials.',
                '- Measured LED timing, button operation, audible alerts and sampling under network load.',
                '- Physical microphone response and end-to-end Wi-Fi outage/recovery.',
+               '- OLED wiring, legibility, fall/SOS/ACK screens, disconnection and recovery under load.',
                '', 'See ../DEMONSTRATION.md for the acceptance procedure.', '']
     (evidence / 'AUTOMATED_RESULTS.md').write_text('\n'.join(report), encoding='utf-8')
     if any(status != 'PASS' for _, status in results):

@@ -13,6 +13,7 @@
 #include "alert_network.h"
 #include "motion_capture.h"
 #include "extra_sensors.h"
+#include "oled.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
@@ -97,7 +98,8 @@ int main(void)
     ExtraSensors_Init();
     if (!AlertNetwork_Init() ||
         xTaskCreate(SensorTask, "sensors", 1536, NULL, 3, NULL) != pdPASS ||
-        xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS)
+        xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS ||
+        xTaskCreate(OLED_Task, "oled", 512, NULL, 1, NULL) != pdPASS)
         App_Fatal();
     vTaskStartScheduler();
     App_Fatal();
@@ -289,6 +291,7 @@ static void SensorTask(void *argument)
             capture_outcome = detector.reason;
         MotionCapture_Add(&motion, capture_trigger, capture_outcome);
         int fall_detected = (detector.state == FD_FALL_LATCHED);
+        OLED_SetStatus(fall_detected ? (alert_ui.sos_pattern ? 2U : 1U) : 0U);
         ExtraSensors_Update(now);
         uint32_t tone = AlertUI_BuzzerHz(&alert_ui, now);
         Buzzer_SetFrequency(tone);

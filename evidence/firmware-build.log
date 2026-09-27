@@ -1,0 +1,4 @@
+   text	   data	    bss	    dec	    hex	filename
+  73040	    308	 101428	 174776	  2aab8	D:\CG2028\Lab3\CG2028_Enhancements\build\CG2028_Enhancements.elf
+D:\CG2028\Lab3\CG2028_Enhancements\build\CG2028_Enhancements.elf
+D:/stm32ide/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.0.202411081344/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/bin/ld.exe: warning: D:\CG2028\Lab3\CG2028_Enhancements\build\CG2028_Enhancements.elf has a LOAD segment with RWX permissions

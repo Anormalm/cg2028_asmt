@@ -1,0 +1,4 @@
+PASS: motion capture history, chunks, two-slot buffering and overflow
+PASS: 32725 actual ARM EWMA cases, including register/stack preservation
+PASS: 14 detector scenarios (synthetic filtered inputs)
+PASS: SOS, buzzer escalation, release gating and tick wraparound

@@ -1,0 +1,2 @@
+PASS: actual ARM PWM driver pin mapping, frequencies, duty, rest, bounds and APB prescaling
+PASS: compiled OLED setup, complete frames, normal/fall/SOS/ACK, redraw suppression, finite timeout, failure and recovery
