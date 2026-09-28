@@ -13,12 +13,6 @@
 
 #define OLED_I2C_ADDR   (0x3C << 1)
 
-extern volatile uint32_t oled_online;
-extern volatile uint32_t oled_errors;
-/* Status 0 = normal, 1 = confirmed fall, 2 = manual SOS. */
-void OLED_SetStatus(uint32_t status);
-void OLED_Service(uint32_t now);
-void OLED_Task(void *argument);
 void OLED_Init(void);
 void OLED_Clear(void);
 void OLED_Update(void);
@@ -41,5 +35,7 @@ void OLED_ShowFallDetected(void);
 
 void OLED_ShowSmiley(void);
 void OLED_ShowFrown(void);
+
+void OLED_ShowTemperatureHumidity(float temperature, float humidity);
 
 #endif /* SRC_OLED_H_ */
