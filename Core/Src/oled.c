@@ -356,6 +356,134 @@ void OLED_ShowFrown(void)
 }
 
 
+static const uint8_t digit_font[10][5] =
+{
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, // 0
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46}, // 2
+    {0x21, 0x41, 0x45, 0x4B, 0x31}, // 3
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39}, // 5
+    {0x3C, 0x4A, 0x49, 0x49, 0x30}, // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03}, // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36}, // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1E}  // 9
+};
+
+static void OLED_DrawDigit(uint8_t digit, int x, int y)
+{
+    for (int col = 0; col < 5; col++)
+    {
+        for (int row = 0; row < 7; row++)
+        {
+            if (digit_font[digit][col] & (1 << row))
+            {
+                OLED_FillRect(
+                    x + col,
+                    y + row,
+                    1,
+                    1
+                );
+            }
+        }
+    }
+}
+
+int OLED_WriteWords(int x, int y, int len, const uint8_t chars[][5])
+{
+	int last_x = 0;
+    for (int c = 0; c < len; c++) {
+        for (int column = 0; column < 5; column++) {
+            for (int row = 0; row < 7; row++) {
+                if (chars[c][column] & (1 << row)) {
+                	last_x = x + c * 6 + column;
+                    OLED_SetPixel(last_x, y + row, 1);
+                }
+            }
+        }
+    }
+    return last_x;
+}
+
+static void OLED_WriteTemperature(int x, int y, char temp_str[10])
+{
+    const uint8_t chars[][5] =
+    {
+        {0x01, 0x01, 0x7F, 0x01, 0x01}, //T
+        {0x38, 0x54, 0x54, 0x54, 0x18}, //e
+        {0x7C, 0x04, 0x18, 0x04, 0x78}, //m
+        {0x7C, 0x14, 0x14, 0x14, 0x08}, //p
+        {0x38, 0x54, 0x54, 0x54, 0x18}, //e
+        {0x7C, 0x08, 0x04, 0x04, 0x08}, //r
+        {0x38, 0x54, 0x54, 0x54, 0x7C}, //a
+        {0x04, 0x3F, 0x44, 0x40, 0x20}, //t
+        {0x3C, 0x40, 0x40, 0x20, 0x7C}, //u
+        {0x7C, 0x08, 0x04, 0x04, 0x08}, //r
+        {0x38, 0x54, 0x54, 0x54, 0x18}, //e
+        {0x00, 0x36, 0x36, 0x00, 0x00} //:
+    };
+    x = OLED_WriteWords(x, y, 12, chars);
+    x += 6;
+
+    for (int i = 0; temp_str[i] != '\0'; i++)
+    {
+        if (temp_str[i] >= '0' && temp_str[i] <= '9') { //number
+            OLED_DrawDigit(temp_str[i] - '0', x, y);
+            x += 6;
+        }
+        else if (temp_str[i] == '.') { //dot
+            OLED_FillRect(x, y + 6, 2, 2);
+            x += 4;
+        }
+    }
+    const uint8_t unit_chars[][5]= {
+    	{0x06, 0x09, 0x09, 0x06, 0x00}, //degree
+		{0x3E, 0x41, 0x41, 0x41, 0x22} //C
+    };
+
+    x = OLED_WriteWords(x, y, 2, unit_chars);
+}
+
+static void OLED_WriteHumidity(int x, int y, char hum_str[10]) {
+    const uint8_t chars[][5] = {
+        {0x7F, 0x08, 0x08, 0x08, 0x7F}, //H
+        {0x3C, 0x40, 0x40, 0x20, 0x7C}, //u
+        {0x7C, 0x04, 0x18, 0x04, 0x78}, //m
+        {0x00, 0x44, 0x7D, 0x40, 0x00}, //i
+        {0x38, 0x44, 0x44, 0x44, 0x7F}, //d
+        {0x00, 0x44, 0x7D, 0x40, 0x00}, //i
+        {0x04, 0x3F, 0x44, 0x40, 0x20}, //t
+        {0x0C, 0x50, 0x50, 0x50, 0x3C}, //y
+        {0x00, 0x36, 0x36, 0x00, 0x00} //:
+    };
+    x = OLED_WriteWords(x, y, 9, chars);
+    x += 6;
+
+    for (int i = 0; hum_str[i] != '\0'; i++) {
+        if (hum_str[i] >= '0' && hum_str[i] <= '9') { //number
+            OLED_DrawDigit(hum_str[i] - '0', x, y);
+            x += 6;
+        }
+        else if (hum_str[i] == '.') { //dot
+            OLED_FillRect(x, y + 6, 2, 2);
+            x += 4;
+        }
+    }
+    const uint8_t percent[][5] = {{0x61, 0x12, 0x08, 0x24, 0x43}};
+    x = OLED_WriteWords(x, y, 1, percent);
+}
+
+void OLED_ShowTemperatureHumidity(float temperature, float humidity) {
+    char temp_str[10];
+    char hum_str[10];
+
+    snprintf(temp_str, sizeof(temp_str), "%.2f", temperature);
+    snprintf(hum_str, sizeof(hum_str), "%.1f", humidity);
+    OLED_Clear();
+    OLED_WriteTemperature(4,5, temp_str);
+    OLED_WriteHumidity(4,28, hum_str);
+}
+
 static void OLED_ShowSOS(void)
 {
     OLED_Clear();
@@ -377,14 +505,23 @@ void OLED_Service(uint32_t now)
 {
     if (!oled_online) return;
     uint32_t status = requested_status;
-    uint32_t phase = status ? (now / 1000U) % 2U : 0;
-    if (status == displayed_status && phase == displayed_phase) return;
-    if (!status) OLED_ShowSmiley();
-    else if (phase) OLED_ShowFrown();
-    else if (status == 2U) OLED_ShowSOS();
-    else OLED_ShowFallDetected();
+    uint32_t phase = (now / 2000U) % 2U;
+
+    if (status == 0U) {
+        if (status == displayed_status && phase == displayed_phase) return;
+        if (phase) OLED_ShowTemperatureAndHumidity();
+        else OLED_ShowSmiley();
+    } else {
+        if (status == displayed_status) return;
+        if (status == 2U) OLED_ShowSOS();
+        else OLED_ShowFallDetected();
+    }
+
     OLED_Update();
-    if (oled_online) { displayed_status = status; displayed_phase = phase; }
+    if (oled_online) {
+        displayed_status = status;
+        displayed_phase = phase;
+    }
 }
 
 static int OLED_BusInit(void)
@@ -426,3 +563,5 @@ void OLED_Task(void *argument)
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
+
+
