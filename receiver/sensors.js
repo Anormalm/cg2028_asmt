@@ -10,16 +10,16 @@ function fillSensorSettings(s) {
 function renderSensors() {
   const list = matching(state.sensors || []);
   if (!list.some(s => s.device === sensorSelected)) sensorSelected = list[0]?.device || '';
-  $('sensorDevice').innerHTML = list.map(s => `<option value="${esc(s.device)}">${esc(s.device)}</option>`).join('');
+  html('sensorDevice', list.map(s => `<option value="${esc(s.device)}">${esc(s.device)}</option>`).join(''));
   $('sensorDevice').value = sensorSelected;
   const s = sensorItem();
   $('sensorEmpty').hidden = !!s; $('sensorContent').hidden = !s;
-  if (!s) { $('sensorUpdated').textContent = 'Waiting for sensor data'; return; }
+  if (!s) { $('sensorUpdated').textContent = 'Waiting for readings'; return; }
   const fresh = connected && s.online;
-  $('sensorUpdated').textContent = (fresh ? 'Received ' : 'Stale data - last received ') + date(s.received);
-  $('soundValue').textContent = fresh && s.sound_valid ? `${(s.sound_dbfs/10).toFixed(1)} dBFS` : '--';
-  $('soundStatus').textContent = !fresh ? 'Unavailable' : s.mic_error ? `Microphone error ${s.mic_error}` : !s.sound_valid ? (s.config_revision === s.settings.revision && !s.settings.sound ? 'Disabled' : 'Waiting for samples') : s.sound_masked ? 'Device sound excluded' : s.sound_active ? 'Activity' : 'Quiet';
-  $('soundCount').textContent = `${s.sound_events} activity bursts since boot`;
+  $('sensorUpdated').textContent = (fresh ? 'Updated ' : 'Last update ') + date(s.received);
+  $('soundValue').textContent = 'Relative level: ' + (fresh && s.sound_valid ? `${(s.sound_dbfs/10).toFixed(1)} dBFS` : 'unavailable');
+  $('soundStatus').textContent = !fresh ? 'Unavailable' : s.mic_error ? 'Microphone unavailable' : !s.sound_valid ? (s.config_revision === s.settings.revision && !s.settings.sound ? 'Monitoring paused' : 'Waiting for readings') : s.sound_masked ? 'Device sound excluded' : s.sound_active ? 'Activity detected' : 'Quiet';
+  $('soundCount').textContent = `${s.sound_events} sound events since device restart`;
   const applied = s.config_revision === s.settings.revision;
   $('settingsApplied').textContent = !fresh ? 'Board unavailable - settings may be pending' : applied ? 'Applied on board' : 'Waiting for board to apply settings';
   if (sensorFormDevice !== s.device || (!sensorDirty && sensorRevision !== s.settings.revision)) fillSensorSettings(s);
@@ -57,7 +57,7 @@ document.getElementById('sensorSettings').onsubmit=async e=>{
   try {
     const c=await(await api('/api/sensor-settings',body)).json();
     s.settings=c;sensorDirty=false;sensorFormDevice='';
-    $('sensorSaveStatus').textContent='Saved. Waiting for the board to apply it.';
+    $('sensorSaveStatus').textContent='Settings saved.';
     renderSensors();await refresh();
   } catch(error) {$('sensorSaveStatus').textContent=error.message;}
   finally {$('saveSensors').disabled=false;}

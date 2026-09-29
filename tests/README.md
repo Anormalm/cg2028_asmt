@@ -70,15 +70,20 @@ post-event acceleration/rotation stays high. Tune on repeated physical trials.
 ## Recording a missed fall or false alarm
 
 1. Let the protected board settle in NORMAL for at least two seconds.
-2. Open Motion trials on the receiver. For a deliberate trial, set
+2. For a deliberate trial, set
    `debug_capture_request` to `1` in CubeIDE and perform the motion within the next
    four seconds. Avoid pausing at breakpoints during a motion; that creates a
    sample gap and invalidates timing.
 3. Wait for `capture_completed` to increase and then for upload to complete.
-   Review acceleration and angular-speed plots and the terminal decision.
+   Open Event log, filter to Motion recordings and select the recording. Compare
+   raw/filtered acceleration and angular-speed waveforms, inspect samples and
+   review the detector result under Recording details. Download its CSV for analysis.
 4. Label the trial according to the motion you actually performed. Record the
-   fixture, orientation, surface, expected result and observed result in Notes.
-5. Export CSV. Compare repeated controlled falls against sitting, bending,
+   fixture, orientation, surface, expected result and observed result in your
+   experiment log. `/api/notes` still supports saved annotations; these do not
+   train a model or change detector thresholds. Trial labels/notes remain outside
+   the caregiver UI; recordings themselves are available within Event log.
+5. Compare repeated controlled falls against sitting, bending,
    tilting, carrying and light shaking. Change one parameter at a time only after
    you have evidence; repeat both fall and normal-activity trials after changes.
 6. Test B2 double-tap sound test, 3-second SOS, escalation after 15 seconds and

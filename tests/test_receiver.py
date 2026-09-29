@@ -108,8 +108,8 @@ class ReceiverTests(unittest.TestCase):
         store.db.close()
 
     def test_dashboard_served(self):
-        self.assertIn(b'ElderCare alerts', self.request('/'))
-        self.assertIn(b'selectCapture', self.request('/app.js'))
+        self.assertIn(b'<title>ElderCare</title>', self.request('/'))
+        self.assertIn(b'function renderEvents()', self.request('/app.js'))
         self.assertIn(b'.topbar', self.request('/style.css'))
 
     def test_capture_retry_order_export_and_notes(self):

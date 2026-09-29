@@ -168,13 +168,24 @@ preserved; the receiver adds recording tables automatically. Refresh the
 **CG2028_Enhancements** project in CubeIDE, rebuild, launch Debug and Resume.
 The original assignment project is a separate folder.
 
-The dashboard has Monitor, Motion trials and Event log views. It supports device
-and event filters, incident details, caregiver acknowledgement, optional browser
-alert sounds, and CSV exports. Browser sounds require an explicit click and are
-separate from the board buzzer. Recording plots compare raw and assembly-filtered
-acceleration/angular-speed magnitudes; the downloadable CSV preserves all axes.
-Trial labels and notes persist in SQLite. Labels record your observations and
-do not automatically alter the detector.
+The caregiver dashboard has Overview, Sound activity and Event log views.
+Overview shows current alerts and device status. Event log shows falls, help
+requests, local acknowledgements and motion recordings, with device/event filters,
+incident details, Mark seen and CSV export. Select a Motion recording entry for
+raw/filtered acceleration and angular-speed waveforms, sample inspection, peak
+measurements and a full recording CSV. Incomplete recordings show upload progress
+and display their waveforms automatically when complete. Connection controls are
+in Settings; microphone readings
+and controls are under Readings and settings. Browser sounds and the separate
+Motion trials page have been removed. Device IDs identify boards; wearer profiles are not
+implemented. Hard-refresh the website (Ctrl+F5) to load the simplified interface.
+
+Motion recordings and existing trial labels/notes remain in SQLite. Trial notes
+are annotations only: they do not train a model or update fall
+thresholds. Authenticated `/api/state` returns recording metadata;
+`/api/capture?device=DEVICE&boot=BOOT&id=ID&format=csv` exports a completed recording,
+and `/api/notes` saves annotations. Recordings have no incident identifier, so the
+log shows them as separate entries instead of guessing a link to a nearby alert.
 
 Recordings target 50 Hz: up to 100 pre-trigger samples and 200 samples starting
 at the trigger (approximately two seconds before and four seconds after).
@@ -202,8 +213,8 @@ during an existing recording is ignored; inspect the counters and wait for an
 upload before another trial. Board reset discards RAM recordings. Each full
 recording uses 100 three-sample HTTP requests, so uploading can take considerably
 longer than recording. Alarms and due heartbeats have priority between requests;
-a request already in progress completes or times out first. Partial recordings
-show upload progress and are not offered as complete plots/CSV files.
+a request already in progress completes or times out first. Recording metadata
+reports upload progress; the CSV endpoint refuses incomplete recordings.
 
 Rejected candidates now report `no_impact`, `no_rotation`, `no_reference`,
 `no_posture`, `confirmation_short`, or `sample_gap`. UART `reject` is a bitmask:
@@ -211,11 +222,11 @@ Rejected candidates now report `no_impact`, `no_rotation`, `no_reference`,
 16=posture hold too short, 32=sampling gap. The confirmation paths are alternatives,
 so not every check is required on every path. Capture flags separately encode
 low-g(1), rotation(2), reference(4), quiet(8), posture(16), possible axis clipping(32)
-and sampling gap(64). Gyroscope CSV axes are in **millidegrees/s**, while plotted
-magnitudes use **degrees/s**. Acceleration axes use **mg**. All timestamps in CSV
+and sampling gap(64). Gyroscope CSV axes are in **millidegrees/s**; divide by 1000
+when plotting in **degrees/s**. Acceleration axes use **mg**. All timestamps in CSV
 are unsigned board uptime milliseconds.
 
-The sensor's current ±2g range can clip hard impacts. The dashboard flags axes
+The sensor's current ±2g range can clip hard impacts. Capture flag 32 marks axes
 approaching ±1950 mg; it cannot reconstruct a clipped peak. A recording marked
 `no_candidate` means no terminal detector decision was captured in that window,
 not proof that the motion was safe.
