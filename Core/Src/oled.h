@@ -42,4 +42,6 @@ void OLED_ShowFallDetected(void);
 void OLED_ShowSmiley(void);
 void OLED_ShowFrown(void);
 
+void OLED_ShowTemperatureHumidity(float temperature, float humidity);
+
 #endif /* SRC_OLED_H_ */
