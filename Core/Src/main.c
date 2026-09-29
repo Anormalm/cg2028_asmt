@@ -19,6 +19,8 @@
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_accelero.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_gyro.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_hsensor.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_tsensor.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -27,48 +29,94 @@
 #include <math.h>
 
 /*--------------------------- Configuration ----------------------------------*/
-#define EWMA_ALPHA_ACCEL_PERCENT   50
-#define EWMA_ALPHA_GYRO_PERCENT    50
+#define EWMA_ALPHA_ACCEL_PERCENT    50
+#define EWMA_ALPHA_GYRO_PERCENT     50
 
-#define SAMPLE_INTERVAL_MS          20
-#define NORMAL_LED_DELAY_MS       1000
-#define FALL_LED_DELAY_MS          150
-#define UART_PRINT_INTERVAL_MS   200
+#define SAMPLE_INTERVAL_MS          20      // 50 Hz
+#define NORMAL_LED_DELAY_MS       1000      // slow blink = all good
+#define FALL_LED_DELAY_MS          150      // fast blink = fall latched
+#define UART_PRINT_INTERVAL_MS     200
+
+#define STANDARD_GRAVITY      9.80665f
+#define MG_TO_MPS2            (STANDARD_GRAVITY / 1000.0f)
+
+/* Task setup (stack sizes are in words) */
+#define SENSOR_TASK_STACK         1536
+#define NETWORK_TASK_STACK        2048
+#define OLED_TASK_STACK            512
+#define SENSOR_TASK_PRIORITY         3      // highest, sampling must stay on time
+#define NETWORK_TASK_PRIORITY        1
+#define OLED_TASK_PRIORITY           1
+
+/* Motion capture triggers on raw readings (compared squared to skip the sqrt).
+ * accel in mg, gyro in mdps. */
+#define CAPTURE_ACCEL_LOW_SQ      250000LL          // < 500 mg   (free fall-ish)
+#define CAPTURE_ACCEL_HIGH_SQ     3240000LL         // > 1800 mg  (hard hit)
+#define CAPTURE_GYRO_HIGH_SQ      22500000000LL     // > 150 dps  (fast spin)
+#define CAPTURE_REARM_SAMPLES     50                // 1 s of still before we allow another capture
+#define ACCEL_CLIP_MG             1950              // close to the +/-2 g sensor limit
+
+/* Bits in MotionSample.flags, so we can see what the detector was doing
+ * when we look at a capture later. */
+enum {
+    MFLAG_LOW_G        = 1U << 0,
+    MFLAG_ROTATION     = 1U << 1,
+    MFLAG_REFERENCE    = 1U << 2,
+    MFLAG_QUIET        = 1U << 3,
+    MFLAG_POSTURE      = 1U << 4,
+    MFLAG_ACCEL_CLIP   = 1U << 5,
+    MFLAG_SAMPLE_GAP   = 1U << 6
+};
+
+/* OLED status codes (see oled.h) */
+#define OLED_STATUS_NORMAL  0U
+#define OLED_STATUS_FALL    1U
+#define OLED_STATUS_SOS     2U
+
 
 static void UART1_Init(void);
 static void UART_Send(const char *text);
 
-extern int ewma_filter(int new_data, int old_output, int alpha_percent);
+extern int ewma_filter(int new_data, int old_output, int alpha_percent); //our code from mov_avg.s
 int ewma_filter_C(int new_data, int old_output, int alpha_percent);
 
 UART_HandleTypeDef huart1;
-
 static FallDetector detector;
 static AlertUI alert_ui;
-/* Set to a frequency in Live Expressions; consumed once, NORMAL only. */
+
+/* Debug hook: set a frequency here in Live Expressions to test the buzzer.
+ * Only plays in NORMAL state and gets cleared after one use. */
 volatile uint32_t debug_buzzer_test_hz;
 volatile int app_scheduler_running;
+
 static void SensorTask(void *argument);
 
+static int config_accel(float mps2)
+{
+    return (int)(mps2 * 1000.0f / FD_GRAVITY);
+}
 static void SystemClock_Config(void)
 {
-    /* MSI 4 MHz -> PLL -> 80 MHz. Leaves CPU headroom for RTOS and telemetry. */
+    /* MSI 4 MHz -> PLL -> 80 MHz. Plenty of headroom for the RTOS tasks and
+     * telemetry, and it divides nicely for the buzzer timer and mic clock. */
     __HAL_RCC_PWR_CLK_ENABLE();
     if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
         App_Fatal();
+
     RCC_OscInitTypeDef oscillator = {0};
     oscillator.OscillatorType = RCC_OSCILLATORTYPE_MSI;
     oscillator.MSIState = RCC_MSI_ON;
     oscillator.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
-    oscillator.MSIClockRange = RCC_MSIRANGE_6;
+    oscillator.MSIClockRange = RCC_MSIRANGE_6;      // 4 MHz
     oscillator.PLL.PLLState = RCC_PLL_ON;
     oscillator.PLL.PLLSource = RCC_PLLSOURCE_MSI;
     oscillator.PLL.PLLM = 1;
-    oscillator.PLL.PLLN = 40;
+    oscillator.PLL.PLLN = 40;                       // 4 MHz * 40 = 160 MHz VCO
     oscillator.PLL.PLLP = RCC_PLLP_DIV7;
     oscillator.PLL.PLLQ = RCC_PLLQ_DIV2;
-    oscillator.PLL.PLLR = RCC_PLLR_DIV2;
+    oscillator.PLL.PLLR = RCC_PLLR_DIV2;            // 160 / 2 = 80 MHz SYSCLK
     if (HAL_RCC_OscConfig(&oscillator) != HAL_OK) App_Fatal();
+
     RCC_ClkInitTypeDef clock = {0};
     clock.ClockType = RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK |
                       RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
@@ -76,36 +124,48 @@ static void SystemClock_Config(void)
     clock.AHBCLKDivider = RCC_SYSCLK_DIV1;
     clock.APB1CLKDivider = RCC_HCLK_DIV1;
     clock.APB2CLKDivider = RCC_HCLK_DIV1;
-    if (HAL_RCC_ClockConfig(&clock, FLASH_LATENCY_4) != HAL_OK) App_Fatal();
+    if (HAL_RCC_ClockConfig(&clock, FLASH_LATENCY_4) != HAL_OK) App_Fatal();   // 4 wait states at 80 MHz
 }
+
 
 int main(void)
 {
     HAL_Init();
     SystemClock_Config();
     UART1_Init();
+
     BSP_LED_Init(LED2);
     BSP_LED_Off(LED2);
+    BSP_TSENSOR_Init();
+    BSP_HSENSOR_Init();
     BSP_PB_Init(BUTTON_USER, BUTTON_MODE_GPIO);
+
+    // can't do anything useful without the motion sensors, so stop here with the LED on
     if (BSP_ACCELERO_Init() != ACCELERO_OK || BSP_GYRO_Init() != GYRO_OK) {
         UART_Send("ERROR: motion sensor initialization failed\r\n");
         BSP_LED_On(LED2);
         while (1) { HAL_Delay(100); }
     }
-    UART_Send("ElderCare: 50Hz; Ar/Af=mg Gr/Gf=mdps; B2: hold 3s for SOS, release+hold 1s to ACK; buzzer D6\r\n");
+    UART_Send("ElderCare: 50Hz; Ar/Af=mg Gr/Gf=mdps; B2: hold 3s for SOS, "
+              "release+hold 1s to ACK; buzzer D6\r\n");
 
     Buzzer_Init();
     ExtraSensors_Init();
+
+    // sensor task gets the highest priority so sampling never gets delayed by WiFi/OLED
     if (!AlertNetwork_Init() ||
-        xTaskCreate(SensorTask, "sensors", 1536, NULL, 3, NULL) != pdPASS ||
-        xTaskCreate(AlertNetwork_Task, "network", 2048, NULL, 1, NULL) != pdPASS ||
-        xTaskCreate(OLED_Task, "oled", 512, NULL, 1, NULL) != pdPASS)
+        xTaskCreate(SensorTask, "sensors", SENSOR_TASK_STACK, NULL, SENSOR_TASK_PRIORITY, NULL) != pdPASS ||
+        xTaskCreate(AlertNetwork_Task, "network", NETWORK_TASK_STACK, NULL, NETWORK_TASK_PRIORITY, NULL) != pdPASS ||
+        xTaskCreate(OLED_Task, "oled", OLED_TASK_STACK, NULL, OLED_TASK_PRIORITY, NULL) != pdPASS) {
         App_Fatal();
+    }
+
     vTaskStartScheduler();
-    App_Fatal();
+    App_Fatal();    // hopefully we never get here
     return 0;
 }
 
+// something went badly wrong: LED on, buzzer off, stop everything
 void App_Fatal(void)
 {
     __disable_irq();
@@ -115,9 +175,12 @@ void App_Fatal(void)
 }
 
 void vApplicationMallocFailedHook(void) { App_Fatal(); }
+
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 {
-    (void)task; (void)name; App_Fatal();
+    (void)task;
+    (void)name;
+    App_Fatal();
 }
 
 static void SensorTask(void *argument)
@@ -152,10 +215,12 @@ static void SensorTask(void *argument)
         uint32_t sample_dt = (uint32_t)(sample_tick - last_sample);
         if (sample_dt > FD_MAX_SAMPLE_GAP_MS) {
             alert_ui.holding = alert_ui.sos_armed = 0;
-            wake = xTaskGetTickCount(); /* Do not replay a backlog of stale samples. */
+            wake = xTaskGetTickCount();
         }
         last_sample = sample_tick;
         if (sample_dt > max_sample_dt) max_sample_dt = sample_dt;
+
+
         int16_t accel_raw_i16[3] = {0, 0, 0};
         float gyro_raw_float[3] = {0.0f, 0.0f, 0.0f};
         int gyro_raw_int[3] = {0, 0, 0};
@@ -235,13 +300,18 @@ static void SensorTask(void *argument)
          *    a fall is detected.
          *********************************************************************/
 
+        /* ---- fall detector + button ---- */
         uint32_t now = HAL_GetTick();
         FallState previous_state = detector.state;
-        int pressed = BSP_PB_GetState(BUTTON_USER) == GPIO_PIN_RESET;
+        int pressed = BSP_PB_GetState(BUTTON_USER) == GPIO_PIN_RESET;   // button is active low
+
         FallDetector_Update(&detector, accel_mps2, accel_magnitude, gyro_magnitude,
                             pressed, now);
         int manual_sos = AlertUI_Update(&alert_ui, now, pressed,
-            detector.state == FD_NORMAL, detector.state == FD_FALL_LATCHED);
+                                        detector.state == FD_NORMAL,
+                                        detector.state == FD_FALL_LATCHED);
+
+        // long press = SOS: jump straight to the latched alarm state
         if (manual_sos) {
             detector.state = FD_FALL_LATCHED;
             detector.state_since = now;
@@ -252,101 +322,147 @@ static void SensorTask(void *argument)
             AlertUI_Update(&alert_ui, now, pressed, 0, 1);
             alert_ui.sos_pattern = 1;
         }
+
         if (debug_buzzer_test_hz) {
             uint32_t requested_hz = debug_buzzer_test_hz;
-            debug_buzzer_test_hz = 0;
+            debug_buzzer_test_hz = 0;   // one shot
             AlertUI_TestTone(&alert_ui, now, requested_hz, detector.state == FD_NORMAL);
         }
+
+        /* ---- motion capture ---- */
         MotionSample motion = {0};
         motion.time_ms = now;
         motion.state = detector.state;
-        motion.flags = (detector.low_g_seen ? 1U : 0U) |
-            (detector.rotation_seen ? 2U : 0U) | (detector.reference_valid ? 4U : 0U) |
-            (detector.quiet_tracking ? 8U : 0U) | (detector.posture_tracking ? 16U : 0U) |
-            (sample_dt > FD_MAX_SAMPLE_GAP_MS ? 64U : 0U);
-        int64_t raw_accel_sq = 0, raw_gyro_sq = 0;
+        motion.flags = (detector.low_g_seen       ? MFLAG_LOW_G     : 0U) |
+                       (detector.rotation_seen    ? MFLAG_ROTATION  : 0U) |
+                       (detector.reference_valid  ? MFLAG_REFERENCE : 0U) |
+                       (detector.quiet_tracking   ? MFLAG_QUIET     : 0U) |
+                       (detector.posture_tracking ? MFLAG_POSTURE   : 0U) |
+                       (sample_dt > FD_MAX_SAMPLE_GAP_MS ? MFLAG_SAMPLE_GAP : 0U);
+
+        int64_t raw_accel_sq = 0;
+        int64_t raw_gyro_sq = 0;
         for (int i = 0; i < 3; ++i) {
-            motion.ar[i] = accel_raw_i16[i]; motion.af[i] = accel_ewma_asm[i];
-            motion.gr[i] = gyro_raw_int[i]; motion.gf[i] = gyro_ewma_asm[i];
+            motion.ar[i] = accel_raw_i16[i];
+            motion.af[i] = accel_ewma_asm[i];
+            motion.gr[i] = gyro_raw_int[i];
+            motion.gf[i] = gyro_ewma_asm[i];
             raw_accel_sq += (int64_t)motion.ar[i] * motion.ar[i];
-            raw_gyro_sq += (int64_t)motion.gr[i] * motion.gr[i];
-            if (motion.ar[i] >= 1950 || motion.ar[i] <= -1950) motion.flags |= 32U;
+            raw_gyro_sq  += (int64_t)motion.gr[i] * motion.gr[i];
+            if (motion.ar[i] >= ACCEL_CLIP_MG || motion.ar[i] <= -ACCEL_CLIP_MG)
+                motion.flags |= MFLAG_ACCEL_CLIP;
         }
+
+        // detector just left NORMAL -> something interesting might be happening
         int candidate_started = previous_state == FD_NORMAL &&
             (detector.state == FD_WAIT_IMPACT || detector.state == FD_CONFIRM);
+
+        /* What starts a capture (in order): manual request from the debugger,
+         * a fall candidate, or a big raw spike the detector ignored. */
         const char *capture_trigger = NULL;
-        if (debug_capture_request) { capture_trigger = "manual"; debug_capture_request = 0; }
-        else if (capture_armed && candidate_started) capture_trigger = "candidate";
-        else if (capture_armed && detector.state == FD_NORMAL &&
-            (raw_accel_sq < 250000LL || raw_accel_sq > 3240000LL || raw_gyro_sq > 22500000000LL))
+        if (debug_capture_request) {
+            capture_trigger = "manual";
+            debug_capture_request = 0;
+        } else if (capture_armed && candidate_started) {
+            capture_trigger = "candidate";
+        } else if (capture_armed && detector.state == FD_NORMAL &&
+                   (raw_accel_sq < CAPTURE_ACCEL_LOW_SQ ||
+                    raw_accel_sq > CAPTURE_ACCEL_HIGH_SQ ||
+                    raw_gyro_sq > CAPTURE_GYRO_HIGH_SQ)) {
             capture_trigger = "raw_motion";
-        if (capture_trigger) { capture_armed = 0; capture_quiet = 0; }
-        if (accel_magnitude > 0.85f * FD_GRAVITY && accel_magnitude < 1.15f * FD_GRAVITY && gyro_magnitude < 20.0f) {
-            if (++capture_quiet >= 50) capture_armed = 1;
-        } else capture_quiet = 0;
+        }
+        if (capture_trigger) {
+            capture_armed = 0;
+            capture_quiet = 0;
+        }
+
+        // only re-arm after ~1 s of the wearer being still (about 1 g, barely rotating)
+        if (accel_magnitude > 0.85f * FD_GRAVITY && accel_magnitude < 1.15f * FD_GRAVITY &&
+            gyro_magnitude < 20.0f) {
+            if (++capture_quiet >= CAPTURE_REARM_SAMPLES) capture_armed = 1;
+        } else {
+            capture_quiet = 0;
+        }
+
+        // tag the capture with the result: either a fall was latched or the candidate got rejected
+        int candidate_rejected = (previous_state == FD_CONFIRM || previous_state == FD_WAIT_IMPACT) &&
+                                 detector.state == FD_STARTUP;
         const char *capture_outcome = NULL;
         if (previous_state != detector.state && previous_state != FD_FALL_LATCHED &&
-            (detector.state == FD_FALL_LATCHED ||
-             ((previous_state == FD_CONFIRM || previous_state == FD_WAIT_IMPACT) && detector.state == FD_STARTUP)))
+            (detector.state == FD_FALL_LATCHED || candidate_rejected)) {
             capture_outcome = detector.reason;
+        }
         MotionCapture_Add(&motion, capture_trigger, capture_outcome);
+
+        /* ---- outputs: OLED, mic, buzzer ---- */
         int fall_detected = (detector.state == FD_FALL_LATCHED);
-        OLED_SetStatus(fall_detected ? (alert_ui.sos_pattern ? 2U : 1U) : 0U);
+        uint32_t oled_status = OLED_STATUS_NORMAL;
+        if (fall_detected) oled_status = alert_ui.sos_pattern ? OLED_STATUS_SOS : OLED_STATUS_FALL;
+        OLED_SetStatus(oled_status);
+
         ExtraSensors_Update(now);
-        uint32_t tone = AlertUI_BuzzerHz(&alert_ui, now);
-        Buzzer_SetFrequency(tone);
+        Buzzer_SetFrequency(AlertUI_BuzzerHz(&alert_ui, now));
+
+        /* ---- network events ---- */
         AlertEvent message = {0};
         message.uptime_ms = now;
         message.incident = incident;
-        message.accel_mg = (int)(accel_magnitude * 1000.0f / FD_GRAVITY);
+        message.accel_mg = config_accel(accel_magnitude);
         message.gyro_dps = (int)gyro_magnitude;
-        message.min_mg = (int)(detector.min_accel * 1000.0f / FD_GRAVITY);
-        message.peak_mg = (int)(detector.peak_accel * 1000.0f / FD_GRAVITY);
+        message.min_mg = config_accel(detector.min_accel);
+        message.peak_mg = config_accel(detector.peak_accel);
         message.peak_dps = (int)detector.peak_gyro;
         message.rejection_flags = detector.rejection_flags;
         snprintf(message.state, sizeof(message.state), "%s", FallState_Name(detector.state));
         snprintf(message.reason, sizeof(message.reason), "%s", detector.reason);
+
         if (fall_detected && previous_state != FD_FALL_LATCHED) {
+            // new alarm -> opens a new incident (its id = this event's sequence)
             strcpy(message.type, manual_sos ? "sos" : "fall");
             message.incident = 0;
             incident = AlertNetwork_Publish(&message);
         } else if (!fall_detected && previous_state == FD_FALL_LATCHED) {
+            // wearer acknowledged on the device -> close the incident
             strcpy(message.type, "local_ack");
             AlertNetwork_Publish(&message);
             incident = 0;
         }
-        if ((previous_state == FD_CONFIRM || previous_state == FD_WAIT_IMPACT) && detector.state == FD_STARTUP) {
+        if (candidate_rejected) {
+            // near-fall that turned out fine, still worth logging
             strcpy(message.type, "rejected");
             message.incident = 0;
             AlertNetwork_Publish(&message);
         }
+
+        // latest state for the heartbeat
         message.incident = incident;
         AlertNetwork_SetSnapshot(&message);
 
+        /* ---- UART event log ---- */
         if (previous_state != detector.state) {
             char event[160];
             snprintf(event, sizeof(event),
                      "EVENT t=%lu state=%s why=%s min_mg=%d peak_mg=%d peak_dps=%d reject=%lu\r\n",
                      (unsigned long)now, FallState_Name(detector.state), detector.reason,
-                     (int)(detector.min_accel * 1000.0f / FD_GRAVITY),
-                     (int)(detector.peak_accel * 1000.0f / FD_GRAVITY),
+					 config_accel(detector.min_accel), config_accel(detector.peak_accel),
                      (int)detector.peak_gyro, (unsigned long)detector.rejection_flags);
             UART_Send(event);
+
+            // restart the blink right away when going into/out of the alarm
             if (fall_detected || previous_state == FD_FALL_LATCHED) {
                 BSP_LED_On(LED2);
                 last_led_toggle = now;
             }
         }
 
-        uint32_t led_delay =
-            fall_detected ? FALL_LED_DELAY_MS : NORMAL_LED_DELAY_MS;
-
-        if ((now - last_led_toggle) >= led_delay)
-        {
+        /* ---- LED blink ---- */
+        uint32_t led_delay = fall_detected ? FALL_LED_DELAY_MS : NORMAL_LED_DELAY_MS;
+        if ((now - last_led_toggle) >= led_delay) {
             BSP_LED_Toggle(LED2);
             last_led_toggle = now;
         }
 
+        /* ---- periodic UART status line ---- */
         if ((uint32_t)(now - last_uart_print) >= UART_PRINT_INTERVAL_MS) {
             last_uart_print = now;
             char buffer[320];
@@ -362,7 +478,7 @@ static void SensorTask(void *argument)
                      accel_ewma_asm[0], accel_ewma_asm[1], accel_ewma_asm[2],
                      gyro_raw_int[0], gyro_raw_int[1], gyro_raw_int[2],
                      gyro_ewma_asm[0], gyro_ewma_asm[1], gyro_ewma_asm[2],
-                     (int)(accel_magnitude * 1000.0f / 9.80665f), (int)gyro_magnitude);
+                     (int)(accel_magnitude * 1000.0f / STANDARD_GRAVITY), (int)gyro_magnitude);
             UART_Send(buffer);
             max_sample_dt = 0;
         }
