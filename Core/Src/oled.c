@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include "FreeRTOS.h"
 #include "task.h"
-
+#include <stdio.h>
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_hsensor.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_tsensor.h"
 
 /* Felix's framebuffer artwork, integrated on a dedicated low-priority task.
  * Only this task touches I2C1; motion sensors use the separate I2C2 bus. */
@@ -222,102 +224,64 @@ void OLED_Update(void)
 void OLED_ShowFallDetected(void)
 {
     OLED_Clear();
-    /*
-     * F
-     */
+    //block letters:
+    //F
     OLED_FillRect(18, 10, 4, 16);
     OLED_FillRect(18, 10, 10, 4);
     OLED_FillRect(18, 16, 8, 4);
-
-    /*
-     * A
-     */
+    //A
     OLED_FillRect(34, 10, 4, 16);
     OLED_FillRect(44, 10, 4, 16);
     OLED_FillRect(38, 10, 6, 4);
     OLED_FillRect(38, 16, 6, 4);
-
-    /*
-     * L
-     */
+    //L
     OLED_FillRect(54, 10, 4, 16);
     OLED_FillRect(54, 22, 10, 4);
-
-    /*
-     * L
-     */
+    //L
     OLED_FillRect(70, 10, 4, 16);
     OLED_FillRect(70, 22, 10, 4);
-
-    /*
-     * D
-     */
+    //
+    //D
     OLED_FillRect(12, 36, 3, 14);
     OLED_FillRect(12, 36, 7, 3);
     OLED_FillRect(12, 47, 7, 3);
     OLED_FillRect(19, 39, 3, 8);
-
-    /*
-     * E
-     */
+    //E
     OLED_FillRect(25, 36, 3, 14);
     OLED_FillRect(25, 36, 8, 3);
     OLED_FillRect(25, 42, 7, 3);
     OLED_FillRect(25, 47, 8, 3);
-
-    /*
-     * T
-     */
+    //T
     OLED_FillRect(36, 36, 9, 3);
     OLED_FillRect(39, 36, 3, 14);
-
-    /*
-     * E
-     */
+    //E
     OLED_FillRect(48, 36, 3, 14);
     OLED_FillRect(48, 36, 8, 3);
     OLED_FillRect(48, 42, 7, 3);
     OLED_FillRect(48, 47, 8, 3);
-
-    /*
-     * C
-     */
+    //C
     OLED_FillRect(59, 36, 3, 14);
     OLED_FillRect(59, 36, 8, 3);
     OLED_FillRect(59, 47, 8, 3);
-    // C has no middle bar.
-
-    /*
-     * T
-     */
+    //T
     OLED_FillRect(70, 36, 9, 3);
     OLED_FillRect(73, 36, 3, 14);
-
-    /*
-     * E
-     */
+    //E
     OLED_FillRect(82, 36, 3, 14);
     OLED_FillRect(82, 36, 8, 3);
     OLED_FillRect(82, 42, 7, 3);
     OLED_FillRect(82, 47, 8, 3);
-
-    /*
-     * D
-     */
+    //D
     OLED_FillRect(93, 36, 3, 14);
     OLED_FillRect(93, 36, 7, 3);
     OLED_FillRect(93, 47, 7, 3);
     OLED_FillRect(100, 39, 3, 8);
 
-    /*
-     * !!!
-     */
+    //!!!
     OLED_FillRect(107, 36, 3, 9);
     OLED_FillRect(107, 48, 3, 3);
-
     OLED_FillRect(114, 36, 3, 9);
     OLED_FillRect(114, 48, 3, 3);
-
     OLED_FillRect(121, 36, 3, 9);
     OLED_FillRect(121, 48, 3, 3);
 }
@@ -372,12 +336,9 @@ static const uint8_t digit_font[10][5] =
 
 static void OLED_DrawDigit(uint8_t digit, int x, int y)
 {
-    for (int col = 0; col < 5; col++)
-    {
-        for (int row = 0; row < 7; row++)
-        {
-            if (digit_font[digit][col] & (1 << row))
-            {
+    for (int col = 0; col < 5; col++) {
+        for (int row = 0; row < 7; row++) {
+            if (digit_font[digit][col] & (1 << row)) {
                 OLED_FillRect(
                     x + col,
                     y + row,
@@ -509,8 +470,13 @@ void OLED_Service(uint32_t now)
 
     if (status == 0U) {
         if (status == displayed_status && phase == displayed_phase) return;
-        if (phase) OLED_ShowTemperatureAndHumidity();
-        else OLED_ShowSmiley();
+        if (phase) {
+        	float temperature = BSP_TSENSOR_ReadTemp();
+        	float humidity = BSP_HSENSOR_ReadHumidity();
+        	OLED_ShowTemperatureHumidity(temperature,humidity);
+        } else {
+        	OLED_ShowSmiley();
+        }
     } else {
         if (status == displayed_status) return;
         if (status == 2U) OLED_ShowSOS();
@@ -539,8 +505,10 @@ static int OLED_BusInit(void)
     gpio.Alternate = GPIO_AF4_I2C1;
     HAL_GPIO_Init(GPIOB, &gpio);
     hi2c1.Instance = I2C1;
+
     /* 80 MHz PCLK1, approximately 100 kHz; verify with actual bus pull-ups. */
-    hi2c1.Init.Timing = 0x10909CEC;
+    //hi2c1.Init.Timing = 0x10909CEC;
+    hi2c1.Init.Timing = 0x00702991; //chose 400kHz to be faste
     hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
     hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
     hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
